@@ -57,7 +57,10 @@ function readLive() {
       name: raw.name,
       nameSource: raw.nameSource,
       status: raw.status,
+      // 'interactive' | 'bg' — a background agent is owned by the daemon, not by a
+      // terminal, and the CLI refuses `--resume` on one while it runs.
       kind: raw.kind,
+      jobId: raw.jobId,
       entrypoint: raw.entrypoint,
       startedAt: raw.startedAt,
       updatedAt: raw.updatedAt,
@@ -177,7 +180,10 @@ function scanTranscript(file) {
 // with a name is a real user-chosen title.
 function liveCustomName(l) {
   if (!l || !l.name) return null;
-  return l.nameSource === 'derived' ? null : l.name;
+  if (l.nameSource === 'derived') return null;
+  // Background agents get their whole dispatch prompt as the registry name, newlines
+  // and all — one row is one line, so flatten it rather than let it blow up the list.
+  return l.name.replace(/\s+/g, ' ').trim() || null;
 }
 
 // ------------------------------------------------------------------ assembly
@@ -265,6 +271,8 @@ function list(currentCwd) {
       size: t.size,
       live: Boolean(l),
       status: l?.status || null,
+      kind: l?.kind || null,
+      jobId: l?.jobId || null,
       pid: l?.pid || null,
       socket: l?.socket || null,
       isCurrentProject: Boolean(currentCwd && cwd === currentCwd),
@@ -297,6 +305,8 @@ function list(currentCwd) {
       size: 0,
       live: true,
       status: l.status,
+      kind: l.kind || null,
+      jobId: l.jobId || null,
       pid: l.pid,
       socket: l.socket,
       isCurrentProject: Boolean(currentCwd && l.cwd === currentCwd),

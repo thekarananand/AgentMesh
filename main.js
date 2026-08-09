@@ -90,16 +90,27 @@ function shellQuote(s) {
 
 // Each tab is its own real shell process, not a shared TUI switched with /resume —
 // that's what makes tabs independently interruptible and closable.
-function spawnTab({ resumeSessionId, resumeName, launchCwd } = {}) {
+function spawnTab({ resumeSessionId, resumeName, launchCwd, forkSession, agentsView } = {}) {
   const tabId = crypto.randomUUID();
 
-  // `--resume` restores the custom title into the resume picker on its own, but the
-  // live registry name is minted fresh at startup and falls back to the cwd-derived
-  // autoname. Passing --name keeps the prompt box and terminal title in agreement
-  // with the row that was clicked.
   let cmd = 'claude';
-  if (resumeSessionId) cmd += ` --resume ${resumeSessionId}`;
-  if (resumeSessionId && resumeName) cmd += ` --name ${shellQuote(resumeName)}`;
+  if (agentsView) {
+    // A background agent is driven by the daemon over its own pty host, so there is no
+    // resume that attaches to it — `claude agents` (FleetView) is the CLI's only attach
+    // path, and --cwd scopes it to the folder the clicked row lives in.
+    cmd += ' agents';
+    if (launchCwd) cmd += ` --cwd ${shellQuote(launchCwd)}`;
+  } else if (resumeSessionId) {
+    cmd += ` --resume ${resumeSessionId}`;
+    // A fork gets its own session id, so carrying the original's name over would put
+    // two differently-backed rows under one label.
+    if (forkSession) cmd += ' --fork-session';
+    // `--resume` restores the custom title into the resume picker on its own, but the
+    // live registry name is minted fresh at startup and falls back to the cwd-derived
+    // autoname. Passing --name keeps the prompt box and terminal title in agreement
+    // with the row that was clicked.
+    else if (resumeName) cmd += ` --name ${shellQuote(resumeName)}`;
+  }
 
   // A login shell is still worth paying for — it's what puts `claude` and the rest of
   // the user's toolchain on PATH — but `exec` hands the pty over to Claude Code, so

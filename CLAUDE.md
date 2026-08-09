@@ -130,7 +130,29 @@ The same socket that carries `control`/`rename` is a general inbox — this is t
 
 ## Sidebar behavior
 - Each tab owns a real pty running its own `claude` — tabs are not one TUI switched with `/resume`. That's what makes them independently interruptible and closable.
-- Click a row → if it's already bound to an open tab, focus that tab; otherwise open a **new** tab running `claude --resume <sessionId>` in the session's own cwd.
+- Click a row → if it's already bound to an open tab, focus that tab; if the session is **dead**, open a new tab running `claude --resume <sessionId>` in its own cwd. Live sessions this window doesn't host are never resumed — see below.
+
+## Resume is not attach
+
+`--resume` on a *running* session is wrong in two different ways, and the row click has to
+branch on `kind` from the pid registry (`'interactive'` | `'bg'`):
+
+- **`kind: 'interactive'`, running elsewhere** — the CLI allows it, and that's the trap. Each
+  resume is a second live writer on one transcript. Left unguarded this compounds: one click per
+  window per repaint produced 11 concurrent `claude --resume <same-id>` processes on this machine.
+  AgentMesh now refuses and says so on the row; **⌥click** forks instead (`--fork-session`, new
+  session id, name deliberately not carried over).
+- **`kind: 'bg'`** — the CLI refuses outright: `Error: Session <id> is currently running as a
+  background agent (bg). Use \`claude agents\` to find and attach to it, or add --fork-session to
+  branch off a copy.` The guard is `if (!t.forkSession) { … await $Fe(sessionId) … }` on every
+  resume entrypoint (flag, file, title). Clicking a bg row opens a tab running
+  `claude agents --cwd <row.cwd>` — FleetView is the only real attach path; there is **no
+  `--attach` flag**, attaching is a keystroke inside that TUI (`bg-attach` / `job_attach` in the
+  binary, driven over the daemon's `bg-pty-host` socket).
+
+Background agents also differ in the registry: `kind: 'bg'`, a `jobId`, no `nameSource`, and
+`name` is the **entire dispatch prompt including newlines** — `liveCustomName()` collapses
+whitespace so one row stays one line.
 - Binding is by **pid ancestry**: one `ps -Ao pid=,ppid=` per refresh, then walk the live session's pid up its parent chain until it hits a tab's shell pid (`tabForPid` in `main.js`). The `claude` process sits 1–3 hops above the pty shell, so the 24-hop cap is generous.
 - `syncTabs` binds each open terminal to the session that registered inside it, which is what the inline rename and the row's close button act on.
 - Row meta is **where and what**, not bookkeeping: project, branch, prompt count. No relative age, no pid — both were noise, and dropping age also removed the 30s repaint timer that existed only to keep it honest.
@@ -153,7 +175,8 @@ If AgentMesh is itself launched from inside a `claude` session, that session's e
 ## Tabs
 - `main.js` keeps `ptys: Map<tabId, ptyProcess>`; `tabId` is a `crypto.randomUUID()` minted at spawn. Every pty IPC message (`pty-input`/`pty-resize`/`pty-close`/`pty-data`/`pty-exit`) carries it.
 - Switching tabs never touches a pty. Each tab's xterm host is `position: absolute; inset: 0` and toggles `visibility: hidden` — every shell keeps running with its own scrollback.
-- **There is no tab strip.** The sidebar is the switcher — it already lists every session on the machine and marks the ones we host, so a second row of the same sessions across the top showed the user the same thing twice. `#drag-strip` is what's left: an empty 36px band that keeps the window draggable and clears the traffic lights.
+- **There is no tab strip**, and nothing replaced it. The sidebar is the switcher — it already lists every session on the machine and marks the ones we host, so a second row of the same sessions across the top showed the user the same thing twice. The terminal runs to the top of the window: the traffic lights sit over the sidebar (which is what `#sidebar-header`'s 84px left pad is for), and the sidebar is drag region enough to move the window by, so the terminal pane needs to reserve nothing.
+- Two ways to start a session, because they answer different questions. `#new-agent` in the sidebar inherits the **active session's folder** — a second agent on what you're already working on, no dialog. The header `+` always opens the folder picker, for starting somewhere else.
 - **Zero tabs is a legitimate state.** Launch shows `#welcome` (folder picker + recent folders pulled straight out of the session rows, so there's no second history to keep in sync) and spawns nothing. A session's cwd is fixed at spawn and decides which project it belongs to, so the folder is asked for up front rather than inherited from wherever the app was launched.
 
 ## The pty *is* Claude Code
@@ -185,7 +208,7 @@ Both fonts degrade rather than break: xterm falls back to generic `monospace`, t
 ## Fonts
 - **Terminal**: `JetBrainsMono Nerd Font Mono`. Pick the `Mono` variant, not `Propo` — fixed-width glyphs align in monospace cells. Settings: fontSize 13, lineHeight 1 (flush, needed for clean ASCII art), letterSpacing 0.
 - **Everything else** (sidebar, welcome pane): `Inter`, with `-apple-system` fallback. Set on `body`; xterm overrides itself via its own `fontFamily` option, so the split needs no extra selectors.
-- One-cell inline margin on each side of the terminal comes from `--cell-w`, measured in `renderer.js` with **canvas `measureText`, not DOM layout** — it has to be known before the first `term.open()`, since xterm sizes against the container box at open time. `fitAll()` subtracts `2 * CELL_W` from the available width when computing cols.
+- One-cell margin on all four sides of the terminal comes from `--cell-w` / `--cell-h`, measured in `renderer.js` before the first `term.open()` — xterm sizes against the container box at open time, so neither can be read off a live terminal. Width uses **canvas `measureText`, not DOM layout**; height uses a hidden `font: <size>px/1 <family>` span probe. `fitAll()` subtracts `2 * CELL_W` from the available width and `2 * CELL_H` from the height.
 
 ## Chrome vs glass
 - Sidebar is **deliberately opaque** (`--chrome-bg: #1b1e24`), which kills vibrancy behind it. Only the terminal pane keeps the blur.

@@ -33,8 +33,23 @@ function measureCellWidth() {
   return ctx.measureText('M').width;
 }
 
+// Canvas metrics give width but not line height, and xterm's row height is the font's
+// natural line box at lineHeight 1 — so measure that with a throwaway span rather than
+// guessing a ratio off the font size.
+function measureCellHeight() {
+  const probe = document.createElement('span');
+  probe.textContent = 'M';
+  probe.style.cssText = `position:absolute;visibility:hidden;white-space:pre;font:${FONT_SIZE}px/1 ${FONT_FAMILY}`;
+  document.body.appendChild(probe);
+  const h = probe.getBoundingClientRect().height;
+  probe.remove();
+  return Math.round(h) || FONT_SIZE;
+}
+
 const CELL_W = measureCellWidth();
+const CELL_H = measureCellHeight();
 document.documentElement.style.setProperty('--cell-w', `${CELL_W}px`);
+document.documentElement.style.setProperty('--cell-h', `${CELL_H}px`);
 
 function el(tag, className, text) {
   const n = document.createElement(tag);
@@ -73,7 +88,7 @@ function fitAll() {
   const any = tabs.get(activeTabId) || tabs.values().next().value;
   const { width, height } = measureCell(any.term);
   const cols = Math.floor((contentEl.clientWidth - 2 * CELL_W) / width);
-  const rows = Math.floor(contentEl.clientHeight / height);
+  const rows = Math.floor((contentEl.clientHeight - 2 * CELL_H) / height);
   if (cols < 2 || rows < 2) return;
   for (const [tabId, tab] of tabs) {
     tab.term.resize(cols, rows);
@@ -87,7 +102,13 @@ function setActive(tabId) {
   activeTabId = tabId;
   for (const [id, tab] of tabs) tab.host.classList.toggle('hidden', id !== tabId);
   showWelcome(false);
+  syncNewAgentButton();
   tabs.get(tabId).term.focus();
+}
+
+function activeCwd() {
+  const tab = tabs.get(activeTabId);
+  return (tab && tab.cwd) || null;
 }
 
 function closeTab(tabId) {
@@ -98,7 +119,10 @@ function closeTab(tabId) {
   tab.host.remove();
   tabs.delete(tabId);
 
-  if (activeTabId !== tabId) return;
+  if (activeTabId !== tabId) {
+    syncNewAgentButton();
+    return;
+  }
   activeTabId = null;
   const next = tabs.keys().next().value;
   // Zero terminals is a legitimate state now: quitting Claude Code closes its
@@ -122,7 +146,13 @@ function openTab(opts) {
   term.open(host);
 
   window.ptyAPI.create(opts).then((tabId) => {
-    tabs.set(tabId, { term, host, sessionId: opts.resumeSessionId || null, title: opts.title || null });
+    tabs.set(tabId, {
+      term,
+      host,
+      sessionId: opts.resumeSessionId || null,
+      title: opts.title || null,
+      cwd: opts.launchCwd || null,
+    });
     term.onData((data) => window.ptyAPI.sendInput(tabId, data));
 
     // Shift+Enter (and Ctrl+Enter) insert a newline instead of submitting. xterm sends
@@ -159,6 +189,20 @@ const recentDirsEl = document.getElementById('recent-dirs');
 function showWelcome(on) {
   welcomeEl.classList.toggle('hidden', !on);
   if (on) renderRecentDirs();
+  syncNewAgentButton();
+}
+
+const newAgentEl = document.getElementById('new-agent');
+const newAgentWhereEl = newAgentEl.querySelector('.where');
+
+// The button reads as "another agent on *this*" when there's a session to inherit a
+// folder from, and as a plain new-session button when there isn't.
+function syncNewAgentButton() {
+  const dir = activeCwd();
+  newAgentWhereEl.textContent = dir ? dir.split('/').filter(Boolean).pop() : '';
+  newAgentEl.title = dir
+    ? `Start another Claude Code session in ${dir}`
+    : 'Start a Claude Code session — pick a folder';
 }
 
 // A session's cwd is fixed at spawn and decides which project it belongs to, so the
@@ -171,7 +215,11 @@ async function newSessionHere(dir) {
 }
 
 pickDirEl.addEventListener('click', () => newSessionHere());
+// Header '+' always asks, so there's still a way to start somewhere else entirely.
 document.getElementById('new-session').addEventListener('click', () => newSessionHere());
+// The button inherits the active session's folder — running a second agent on what
+// you're already working on is the common case, and a dialog every time is friction.
+newAgentEl.addEventListener('click', () => newSessionHere(activeCwd()));
 
 // Every folder that has ever held a session is already in the sidebar's data, so the
 // picker gets a shortcut list for free — no separate history to keep in sync.
@@ -342,6 +390,7 @@ function beginRename(labelEl, sessionId, currentTitle) {
 // happens to have. Both were bookkeeping the user has no use for.
 function meta(row) {
   const parts = [];
+  if (row.live && row.kind === 'bg') parts.push('background');
   if (row.project) parts.push(row.project);
   if (row.gitBranch && row.gitBranch !== 'HEAD') parts.push(row.gitBranch);
   if (row.promptCount) parts.push(`${row.promptCount} prompts`);
@@ -352,6 +401,43 @@ function meta(row) {
     n.appendChild(document.createTextNode(p));
   });
   return n;
+}
+
+// A one-off message on the row itself. Used where a click can't do the obvious thing
+// and the reason is worth a sentence — no dialog, no toast layer.
+function flashRow(node, text) {
+  const existing = node.querySelector('.row-hint');
+  if (existing) existing.remove();
+  const hint = el('div', 'row-hint', text);
+  node.appendChild(hint);
+  setTimeout(() => hint.remove(), 2600);
+}
+
+// A live session is already owned by the process driving it, and `--resume` is not an
+// attach: on an interactive session it starts a *second* writer on one transcript, and
+// on a background agent the CLI refuses it outright ("is currently running as a
+// background agent … add --fork-session to branch off a copy"). So a live row only ever
+// resumes when this window is the one hosting it; otherwise it routes to the CLI's own
+// attach path, or forks on request.
+function activateRow(row, node, { fork } = {}) {
+  if (row.live) {
+    if (row.kind === 'bg') {
+      openTab({ launchCwd: row.cwd, agentsView: true, title: 'agents' });
+      return;
+    }
+    if (!fork) {
+      flashRow(node, 'Running in another window — ⌥click to fork a copy');
+      return;
+    }
+  }
+
+  openTab({
+    resumeSessionId: row.sessionId,
+    resumeName: row.customTitle, // only a real name carries over, never an AI title
+    forkSession: Boolean(fork && row.live),
+    title: row.title,
+    launchCwd: row.cwd,
+  });
 }
 
 function makeRow(row) {
@@ -404,20 +490,16 @@ function makeRow(row) {
   // stray `claude --resume` behind. Focusing an already-open tab is free and
   // idempotent, so that path stays instant and skips the delay entirely.
   let openTimer = null;
-  node.addEventListener('click', () => {
+  node.addEventListener('click', (e) => {
     if (row.tabId && tabs.has(row.tabId)) {
       setActive(row.tabId);
       return;
     }
+    const fork = e.altKey;
     clearTimeout(openTimer);
     openTimer = setTimeout(() => {
       openTimer = null;
-      openTab({
-        resumeSessionId: row.sessionId,
-        resumeName: row.customTitle, // only a real name carries over, never an AI title
-        title: row.title,
-        launchCwd: row.cwd,
-      });
+      activateRow(row, node, { fork });
     }, 220);
   });
 

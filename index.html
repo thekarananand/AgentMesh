@@ -12,6 +12,7 @@
       --chrome-bg: #1b1e24;
       /* one terminal cell, measured at runtime in renderer.js */
       --cell-w: 8px;
+      --cell-h: 17px;
       /* traffic-light strip; renderer overwrites this from titlebar.js */
       --header-h: 36px;
     }
@@ -78,6 +79,36 @@
     #filter:hover, #new-session:hover { color: #abb2bf; }
     #filter.on { color: #4aa5f0; }
     #new-session { font-size: 14px; line-height: 10px; }
+
+    /* The header '+' always asks for a folder. This one is the common case: another
+       agent on the thing you're already working on, no dialog in the way. */
+    #new-agent {
+      -webkit-app-region: no-drag;
+      flex: 0 0 auto;
+      margin: 2px 10px 6px;
+      padding: 6px 8px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      color: #abb2bf;
+      background: #ffffff0a;
+      border: 1px solid #ffffff14;
+      border-radius: 5px;
+      cursor: pointer;
+      user-select: none;
+    }
+    #new-agent:hover { color: #d7dae0; background: #ffffff14; border-color: #4aa5f0; }
+    #new-agent .plus { color: #4aa5f0; font-size: 13px; line-height: 11px; }
+    #new-agent .where {
+      margin-left: auto;
+      color: #5c6370;
+      font-size: 10px;
+      max-width: 45%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
 
     #list {
       flex: 1 1 auto;
@@ -173,6 +204,16 @@
       text-overflow: ellipsis;
     }
     .row-meta .sep { color: #3f4451; padding: 0 4px; }
+
+    /* Why a click didn't do what it looks like it should — lives on the row itself so
+       the explanation is next to the thing it's about. */
+    .row-hint {
+      font-size: 10px;
+      color: #d18f52;
+      margin-top: 3px;
+      white-space: normal;
+    }
+
     .badge-ai { color: #c162de; }
     .badge-name { color: #4aa5f0; }
 
@@ -207,29 +248,25 @@
       flex-direction: column;
     }
 
-    /* No tab strip: sessions are switched from the sidebar. This is only here so the
-       window still has something to drag by, and so the terminal clears the traffic
-       lights the way the sidebar header does. */
-    #drag-strip {
-      height: var(--header-h);
-      flex: 0 0 auto;
-      -webkit-app-region: drag;
-    }
-
+    /* The terminal runs to the top of the window. Nothing needs reserving up there:
+       the traffic lights sit over the sidebar, which is what `#sidebar-header` pads
+       for, and the sidebar is drag region enough to move the window by. */
     #tabs-content {
       flex: 1 1 auto;
       min-height: 0;
       position: relative;
     }
 
-    /* One cell of breathing room on each side. Padding is set before term.open()
-       runs (CLAUDE.md: xterm measures its box at open time), so --cell-w is
-       computed from font metrics up front rather than from a live terminal. */
+    /* One cell of breathing room on every side, so the terminal reads as a framed
+       block rather than text jammed against the window edge. Padding is set before
+       term.open() runs (CLAUDE.md: xterm measures its box at open time), so both
+       cell dimensions are computed from font metrics up front rather than from a
+       live terminal. */
     .term-host {
       position: absolute;
       inset: 0;
       box-sizing: border-box;
-      padding: 0 var(--cell-w);
+      padding: var(--cell-h) var(--cell-w);
     }
     .term-host.hidden {
       visibility: hidden;
@@ -316,13 +353,17 @@
     <div id="sidebar-header">
       <span id="count">SESSIONS</span>
       <span id="filter" title="Toggle: this project only / all projects">ALL</span>
-      <span id="new-session" title="New session in another folder">+</span>
+      <span id="new-session" title="New session in another folder…">+</span>
+    </div>
+    <div id="new-agent" title="Start another Claude Code session">
+      <span class="plus">+</span>
+      <span>New session</span>
+      <span class="where"></span>
     </div>
     <div id="list"></div>
     <div id="sidebar-resizer"></div>
   </div>
   <div id="terminal-pane">
-    <div id="drag-strip"></div>
     <div id="tabs-content">
       <div id="welcome">
         <div id="welcome-title">AgentMesh</div>
