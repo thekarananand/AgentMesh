@@ -12,11 +12,12 @@ Electron app: tabbed xterm.js terminals, each backed by its own node-pty running
 - `index.html` — shell page, sidebar + terminal split layout
 - `titlebar.js` — shared `HEADER_HEIGHT` constant (main + preload both require it)
 
-## Session sidebar — data sources (see full research in conversation, not repeated here)
+## Session sidebar — data sources
 - `claude agents --json` / `~/.claude/sessions/<pid>.json` — **live** sessions only, most stable API. Has `sessionId`, `pid`, `status` (busy/idle), `cwd`, socket path. `sessions.js` reads the JSON files directly (skip shelling out) and validates the pid is still alive with `process.kill(pid, 0)` — the registry file can outlive the process on a crash.
 - `~/.claude/history.jsonl` — flat log of every prompt ever, any project. Cheap source for first-prompt/last-prompt/prompt-count per sessionId. Grows forever — cache the parsed Map keyed on the file's `mtimeMs`, don't reparse every poll.
 - `~/.claude/projects/<slug>/<sessionId>.jsonl` — transcripts. **Explicitly unstable format per Anthropic docs ("changes between versions")**, so every read is defensive (try/catch around JSON.parse per line, never throw). Only tail the last ~96KB (`tailRead`) — these files grow unbounded and we only want the trailing `ai-title`/`mode`/`cwd` records, not the whole conversation.
-- Title priority: custom `--name`/`/rename` (`nameSource: 'user'` in the live registry) > AI-generated `ai-title` record > first prompt from history > raw session id.
+- Title priority: deliberate name (live registry `name` when `nameSource !== 'derived'`, else the transcript's `custom-title`/`agent-name`) > AI-generated `ai-title` record > first prompt from history > raw session id. See the rename section for why `nameSource` is tested that way.
+- Transcript record types seen in the wild: `user`, `attachment`, `last-prompt`, `mode`, `permission-mode`, `ai-title`, `custom-title`, `agent-name`. Records are append-only and last-wins, so `scanTranscript` reads the tail **backwards** and takes the first hit of each kind.
 
 ## Session rename — the UDS control socket
 
@@ -62,6 +63,70 @@ match Claude Code's own generated-name style. Anything already deliberately name
 touched, and each session is attempted once per app run so a failing rename can't retry-storm.
 `SCOPE` is `'tabs'` (only sessions in our own tabs); `'all'` covers every live session on the
 machine, including ones started in another terminal.
+
+## Reading the CLI's internals
+
+Everything undocumented in here was read out of the shipped binary, not guessed. The method,
+because it will be needed again on the next version bump:
+
+```bash
+readlink -f "$(which claude)"        # /opt/homebrew/Caskroom/claude-code@latest/<ver>/claude
+strings -n 6 <that path> > cc-strings.txt   # ~280MB Mach-O, bun-compiled; ~2 min, 420k lines
+```
+
+The bundled JS survives as a handful of enormous single lines, so `grep` is useless for reading
+it — match a needle and print a window of surrounding characters instead (a ~15-line Node script
+doing `indexOf` + `slice`). Log strings are the best entry points: they're distinctive, they sit
+inside the function that implements the thing, and they survive minification when identifiers
+don't. `[uds-messaging] Unhandled control action:` is what led to the whole rename protocol.
+
+Anything found this way gets **verified against a live session** before it's built on — spawn a
+throwaway `claude` in a pty, drive it, and read the files back. See the testing section.
+
+## Cross-session messaging protocol (the mesh substrate)
+
+The same socket that carries `control`/`rename` is a general inbox — this is the thing that makes
+"mesh" more than a sidebar. Confirmed surface, protocol version `peerProtocol: 1`:
+
+- **Transport**: unix socket, newline-delimited JSON, one message per line. Buffer over **1 MiB
+  without a newline drops the connection**. Path is `$XDG_RUNTIME_DIR/cc-socks/<pid>.sock`,
+  falling back to `/tmp/cc-socks-<uid>/<pid>.sock`; the whole path must stay under ~104 bytes.
+- **`{"type":"user","message":{"role":"user","content":"..."}}`** — injects a prompt into the
+  session's queue. Optional `priority` (`next` is the default, `now` jumps the queue), `from`,
+  `msg_id`, `uuid`, `file_attachments`. The CLI's own log line documents it:
+  `echo '{"type":"user",...}' | socat - UNIX-CONNECT:<sock>`.
+- Injected user messages run with **`skipSlashCommands: true`** — you cannot drive `/rename`,
+  `/compact` or any other slash command by injecting it as a prompt. Control actions are the only
+  out-of-band commands.
+- **`{"type":"control","action":"rename","name":"..."}`** — the rename above. Unknown actions are
+  logged and ignored, so probing costs nothing.
+- **`{"type":"control","action":"peer_message_status","status":"held|denied|expired|delivered",
+  "orig_msg_id":"..."}`** — delivery receipts. Peer messages can be **held for the recipient's
+  approval** (permission-mode parity), so cross-session sends are not guaranteed delivery.
+- Senders are identified by peer credentials on the socket (uid check, pid + ancestry read), and
+  a message carrying `session_id` is dropped unless it matches the receiving session.
+
+## Local dev + testing
+
+- Repo is git-backed as of this work; feature work goes on a branch, not `main`.
+- **Never `pkill electron` to test.** The Claude Code session doing the work usually runs *inside*
+  an AgentMesh tab, and `win.on('closed')` kills every pty — that kills the conversation. Launch a
+  **second instance** instead (`nohup npm start > log 2>&1 &`); nothing in `main.js` takes a
+  single-instance lock, and the two windows don't interfere. Kill only by the exact pid you
+  launched.
+- Protocol work is tested against real throwaway sessions, spawned through `node-pty` the same way
+  `spawnTab` does (including the env scrubbing). Two gotchas: a fresh cwd triggers the **trust
+  prompt**, so write `\r` a few seconds after spawn; and registration is asynchronous, so poll
+  `~/.claude/sessions/` for the new pid file rather than sleeping a fixed amount.
+- Clean up after: throwaway sessions leave transcripts under `~/.claude/projects/<slug>/` that
+  otherwise show up in the sidebar's `RECENT` group.
+
+## Other `~/.claude` state (not used yet)
+
+- `daemon/` — `roster.json`, `control.key`, `dispatch/` for background agents.
+- `jobs/`, `tasks/`, `plans/` — background job dirs, scheduled tasks, plan mode artifacts.
+- `session-env/<sessionId>/` — one dir per session, empty in practice on this machine.
+- `history.jsonl`, `projects/`, `sessions/` — the three the sidebar actually reads.
 
 ## Sidebar behavior
 - Each tab owns a real pty running its own `claude` — tabs are not one TUI switched with `/resume`. That's what makes them independently interruptible and closable.
