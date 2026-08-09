@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>AgentMesh</title>
+  <link rel="stylesheet" href="node_modules/xterm/css/xterm.css" />
+  <style>
+    /* Single tint layer only — see CLAUDE.md, anything above ~0.5 alpha kills vibrancy. */
+    html, body { margin: 0; height: 100%; background: #08090945; }
+
+    :root {
+      --chrome-bg: #1b1e24;
+      /* one terminal cell, measured at runtime in renderer.js */
+      --cell-w: 8px;
+    }
+
+    /* Inter everywhere except the terminal itself, which stays monospace. */
+    body {
+      display: flex;
+      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-feature-settings: "cv05" 1, "ss03" 1;
+      color: #abb2bf;
+      overflow: hidden;
+    }
+
+    /* Opaque on purpose: this kills vibrancy behind the sidebar (see CLAUDE.md
+       gotcha #2) and leaves the glass to the terminal pane only. */
+    #sidebar {
+      width: 248px;
+      flex: 0 0 248px;
+      height: 100%;
+      box-sizing: border-box;
+      position: relative;
+      background: var(--chrome-bg);
+      border-right: 1px solid #ffffff12;
+      display: flex;
+      flex-direction: column;
+      -webkit-app-region: drag;
+    }
+
+    #sidebar-resizer {
+      -webkit-app-region: no-drag;
+      position: absolute;
+      top: 0;
+      right: -3px;
+      width: 6px;
+      height: 100%;
+      cursor: col-resize;
+      z-index: 10;
+    }
+    #sidebar-resizer:hover, #sidebar-resizer.dragging { background: #4aa5f04d; }
+
+    body.resizing { cursor: col-resize; user-select: none; }
+    body.resizing #terminal-pane { pointer-events: none; }
+
+    #sidebar-header {
+      height: 36px;
+      flex: 0 0 auto;
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      padding: 0 12px 6px 84px; /* left pad clears the traffic lights */
+      font-size: 10px;
+      letter-spacing: 0.08em;
+      color: #5c6370;
+    }
+
+    #filter {
+      -webkit-app-region: no-drag;
+      cursor: pointer;
+      color: #5c6370;
+      user-select: none;
+    }
+    #filter:hover { color: #abb2bf; }
+    #filter.on { color: #4aa5f0; }
+
+    #list {
+      flex: 1 1 auto;
+      overflow-y: auto;
+      overflow-x: hidden;
+      padding: 4px 0 12px;
+      -webkit-app-region: no-drag;
+    }
+    #list::-webkit-scrollbar { width: 6px; }
+    #list::-webkit-scrollbar-thumb { background: #ffffff14; border-radius: 3px; }
+
+    .group {
+      font-size: 9px;
+      letter-spacing: 0.1em;
+      color: #4f5666;
+      padding: 10px 12px 4px;
+    }
+    .group.collapsible {
+      cursor: pointer;
+      user-select: none;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .group.collapsible:hover { color: #abb2bf; }
+
+    .chev {
+      display: inline-block;
+      font-size: 11px;
+      line-height: 1;
+      transition: transform 120ms ease;
+    }
+    .chev.open { transform: rotate(90deg); }
+
+    .row {
+      padding: 6px 12px 7px 12px;
+      cursor: pointer;
+      border-left: 2px solid transparent;
+    }
+    .row:hover { background: #ffffff0d; }
+    .row.live { border-left-color: #8cc26580; }
+    .row.busy { border-left-color: #d18f52; }
+    /* session already owns a tab in this window — click focuses it, never respawns */
+    .row.open { background: #ffffff0a; border-left-color: #4aa5f0; }
+
+    .row-title {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: #d7dae0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .row.dim .row-title { color: #abb2bf; }
+
+    .dot {
+      flex: 0 0 auto;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #4f5666;
+    }
+    .dot.idle { background: #8cc265; }
+    .dot.busy { background: #d18f52; }
+
+    .row-meta {
+      font-size: 10px;
+      color: #5c6370;
+      margin-top: 2px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .row-meta .sep { color: #3f4451; padding: 0 4px; }
+    .badge-ai { color: #c162de; }
+    .badge-name { color: #4aa5f0; }
+
+    #empty { padding: 16px 12px; font-size: 11px; color: #5c6370; }
+
+    /* ---------------------------------------------------------- terminal pane */
+
+    #terminal-pane {
+      flex: 1 1 auto;
+      min-width: 0;
+      height: 100%;
+      box-sizing: border-box;
+      display: flex;
+      flex-direction: column;
+    }
+
+    #tabbar {
+      height: 36px;
+      flex: 0 0 auto;
+      display: flex;
+      align-items: flex-end;
+      gap: 2px;
+      padding: 0 8px 0 8px;
+      background: var(--chrome-bg);
+      -webkit-app-region: drag;
+      overflow-x: auto;
+      overflow-y: hidden;
+    }
+    #tabbar::-webkit-scrollbar { display: none; }
+
+    .tab {
+      -webkit-app-region: no-drag;
+      flex: 0 0 auto;
+      max-width: 168px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 8px 6px 10px;
+      margin-bottom: 0;
+      font-size: 11px;
+      color: #5c6370;
+      border-radius: 6px 6px 0 0;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .tab:hover { color: #abb2bf; background: #ffffff0a; }
+    .tab.active { color: #d7dae0; background: #ffffff14; }
+
+    .tab-label {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .tab-close {
+      flex: 0 0 auto;
+      width: 14px;
+      height: 14px;
+      border-radius: 3px;
+      text-align: center;
+      line-height: 14px;
+      color: #5c6370;
+    }
+    .tab-close:hover { background: #ffffff1f; color: #e05561; }
+
+    .tab-new {
+      -webkit-app-region: no-drag;
+      flex: 0 0 auto;
+      width: 20px;
+      height: 20px;
+      margin-bottom: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #5c6370;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 13px;
+    }
+    .tab-new:hover { color: #abb2bf; background: #ffffff0a; }
+
+    #tabs-content {
+      flex: 1 1 auto;
+      min-height: 0;
+      position: relative;
+    }
+
+    /* One cell of breathing room on each side. Padding is set before term.open()
+       runs (CLAUDE.md: xterm measures its box at open time), so --cell-w is
+       computed from font metrics up front rather than from a live terminal. */
+    .term-host {
+      position: absolute;
+      inset: 0;
+      box-sizing: border-box;
+      padding: 0 var(--cell-w);
+    }
+    .term-host.hidden {
+      visibility: hidden;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="sidebar">
+    <div id="sidebar-header">
+      <span id="count">SESSIONS</span>
+      <span id="filter" title="Toggle: this project only / all projects">ALL</span>
+    </div>
+    <div id="list"></div>
+    <div id="sidebar-resizer"></div>
+  </div>
+  <div id="terminal-pane">
+    <div id="tabbar">
+      <div id="tab-new" class="tab-new" title="New session">+</div>
+    </div>
+    <div id="tabs-content"></div>
+  </div>
+  <script src="node_modules/xterm/lib/xterm.js"></script>
+  <script src="renderer.js"></script>
+</body>
+</html>
