@@ -141,10 +141,23 @@ function scanTranscript(file) {
   // first line is probably truncated mid-JSON
   if (lines.length > 1) lines.shift();
 
-  const meta = { aiTitle: null, gitBranch: null, cwd: null, version: null, mode: null, permissionMode: null };
+  const meta = {
+    customTitle: null,
+    agentName: null,
+    aiTitle: null,
+    gitBranch: null,
+    cwd: null,
+    version: null,
+    mode: null,
+    permissionMode: null,
+  };
+  // Scanning backwards means the newest record of each kind wins, which is how
+  // Claude Code itself resolves these — a rename appends, it never rewrites.
   for (let i = lines.length - 1; i >= 0; i--) {
     const o = safeParse(lines[i]);
     if (!o) continue;
+    if (!meta.customTitle && o.type === 'custom-title' && o.customTitle) meta.customTitle = o.customTitle;
+    if (!meta.agentName && o.type === 'agent-name' && o.agentName) meta.agentName = o.agentName;
     if (!meta.aiTitle && o.type === 'ai-title' && o.aiTitle) meta.aiTitle = o.aiTitle;
     if (!meta.mode && o.type === 'mode') meta.mode = o.mode;
     if (!meta.permissionMode && o.type === 'permission-mode') meta.permissionMode = o.permissionMode;
@@ -153,9 +166,18 @@ function scanTranscript(file) {
       meta.gitBranch = o.gitBranch || null;
       meta.version = o.version || null;
     }
-    if (meta.aiTitle && meta.cwd && meta.mode) break;
+    if (meta.customTitle && meta.aiTitle && meta.cwd && meta.mode) break;
   }
   return meta;
+}
+
+// The live registry drops `nameSource` entirely once a name is set on purpose
+// (`--name`, `/rename`, or a control-rename over the session socket). It only
+// writes `nameSource: 'derived'` for the cwd-derived autoname, so anything else
+// with a name is a real user-chosen title.
+function liveCustomName(l) {
+  if (!l || !l.name) return null;
+  return l.nameSource === 'derived' ? null : l.name;
 }
 
 // ------------------------------------------------------------------ assembly
@@ -215,13 +237,20 @@ function list(currentCwd) {
     const h = history.get(t.sessionId) || {};
     const cwd = l?.cwd || meta.cwd || h.project || null;
 
+    // A live session's registry entry is fresher than its transcript, so it wins;
+    // the transcript records are what survive after the process is gone.
+    const custom = liveCustomName(l) || meta.customTitle || meta.agentName;
+
     seen.add(t.sessionId);
     rows.push({
       sessionId: t.sessionId,
       // custom name beats AI title beats first prompt beats the raw id
-      title: l?.nameSource === 'user' ? l.name : meta.aiTitle || h.firstPrompt || t.sessionId.slice(0, 8),
-      titleSource: l?.nameSource === 'user' ? 'name' : meta.aiTitle ? 'ai' : h.firstPrompt ? 'prompt' : 'id',
+      title: custom || meta.aiTitle || h.firstPrompt || t.sessionId.slice(0, 8),
+      titleSource: custom ? 'name' : meta.aiTitle ? 'ai' : h.firstPrompt ? 'prompt' : 'id',
       liveName: l?.name || null,
+      customTitle: custom || null,
+      aiTitle: meta.aiTitle || null,
+      file: t.file,
       intent: h.firstPrompt || null,
       lastPrompt: h.lastPrompt || null,
       promptCount: h.promptCount || 0,
@@ -249,8 +278,11 @@ function list(currentCwd) {
     rows.push({
       sessionId,
       title: l.name || sessionId.slice(0, 8),
-      titleSource: l.name ? 'name' : 'id',
+      titleSource: liveCustomName(l) ? 'name' : 'id',
       liveName: l.name,
+      customTitle: liveCustomName(l),
+      aiTitle: null,
+      file: null,
       intent: null,
       lastPrompt: null,
       promptCount: 0,

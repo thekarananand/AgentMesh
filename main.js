@@ -6,6 +6,8 @@ const { execFileSync } = require('child_process');
 const pty = require('node-pty');
 const { HEADER_HEIGHT } = require('./titlebar');
 const sessions = require('./sessions');
+const { rename } = require('./rename');
+const { autoName } = require('./autoname');
 
 let win;
 let unwatch;
@@ -63,16 +65,32 @@ function listAnnotated() {
   return rows;
 }
 
+let autoNaming = false;
+
 function pushSessions() {
   if (!win || win.isDestroyed()) return;
+  const rows = listAnnotated();
   try {
-    win.webContents.send('sessions-update', listAnnotated());
+    win.webContents.send('sessions-update', rows);
   } catch {}
+
+  // Promote a describing title into a real session name for anything still running
+  // under its cwd-derived autoname. Guarded against re-entry because a successful
+  // rename pushes again — that second push is what repaints the row.
+  if (autoNaming) return;
+  autoNaming = true;
+  autoName(rows, pushSessions).finally(() => {
+    autoNaming = false;
+  });
+}
+
+function shellQuote(s) {
+  return `'${String(s).replace(/'/g, `'\\''`)}'`;
 }
 
 // Each tab is its own real shell process, not a shared TUI switched with /resume —
 // that's what makes tabs independently interruptible and closable.
-function spawnTab({ resumeSessionId, launchCwd } = {}) {
+function spawnTab({ resumeSessionId, resumeName, launchCwd } = {}) {
   const tabId = crypto.randomUUID();
   const proc = pty.spawn(shellBin, [], {
     name: 'xterm-color',
@@ -94,8 +112,14 @@ function spawnTab({ resumeSessionId, launchCwd } = {}) {
 
   ptys.set(tabId, proc);
 
-  const cmd = resumeSessionId ? `claude --resume ${resumeSessionId}\r` : 'claude\r';
-  proc.write(cmd);
+  // `--resume` restores the custom title into the resume picker on its own, but the
+  // live registry name is minted fresh at startup and falls back to the cwd-derived
+  // autoname. Passing --name keeps the prompt box and terminal title in agreement
+  // with the row that was clicked.
+  let cmd = 'claude';
+  if (resumeSessionId) cmd += ` --resume ${resumeSessionId}`;
+  if (resumeSessionId && resumeName) cmd += ` --name ${shellQuote(resumeName)}`;
+  proc.write(cmd + '\r');
 
   return tabId;
 }
@@ -139,6 +163,16 @@ function createWindow() {
   ipcMain.on('sessions:reveal', (event, sessionId) => {
     const row = sessions.list(cwd).find((s) => s.sessionId === sessionId);
     if (row && row.cwd) electronShell.openPath(row.cwd);
+  });
+
+  ipcMain.handle('sessions:rename', async (event, { sessionId, name }) => {
+    const row = sessions.list(cwd).find((s) => s.sessionId === sessionId);
+    const result = await rename(row, name);
+    // The live path lands in files the session watcher is already watching, but the
+    // archived path only touches a transcript — push either way so the row updates
+    // without waiting on the poll.
+    pushSessions();
+    return result;
   });
 
   win.webContents.on('did-finish-load', pushSessions);

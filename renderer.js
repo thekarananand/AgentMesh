@@ -154,6 +154,14 @@ function openTab(opts) {
       return false;
     });
     tabEl.addEventListener('click', () => setActive(tabId));
+    // Renaming from the tab strip needs a session to talk to; syncTabLabels attaches
+    // one as soon as the tab's `claude` registers itself.
+    labelEl.addEventListener('dblclick', (e) => {
+      e.stopPropagation();
+      const tab = tabs.get(tabId);
+      if (!tab || !tab.sessionId) return;
+      beginRename(labelEl, tab.sessionId, tab.title || labelEl.textContent);
+    });
     closeEl.addEventListener('click', (e) => {
       e.stopPropagation();
       closeTab(tabId);
@@ -228,6 +236,79 @@ let rows = [];
 let projectOnly = false;
 let recentOpen = false; // history is noise until asked for; live agents are the point
 
+// ------------------------------------------------------------------- renaming
+//
+// A rename is handed to Claude Code rather than stored here: live sessions take it
+// over their control socket, dead ones get it appended to their transcript (see
+// rename.js). Either way the name comes back to us through the session watcher, so
+// `/rename` typed into a tab and a rename done here can't drift apart.
+
+// The session list repaints on every poll, which would rip the input out from under
+// the cursor — hold repaints while an edit is open and flush one when it closes.
+let editingSessionId = null;
+let renderPending = false;
+
+function endEditing() {
+  editingSessionId = null;
+  if (renderPending) {
+    renderPending = false;
+    render();
+  }
+}
+
+// Swaps `labelEl` for a text input in place; restores it on cancel or failure.
+function beginRename(labelEl, sessionId, currentTitle) {
+  if (editingSessionId) return;
+  editingSessionId = sessionId;
+
+  const input = el('input', 'rename-input');
+  input.value = currentTitle || '';
+  input.spellcheck = false;
+  labelEl.replaceWith(input);
+  input.focus();
+  input.select();
+
+  let settled = false;
+  const restore = () => {
+    input.replaceWith(labelEl);
+    endEditing();
+  };
+
+  const commit = async () => {
+    if (settled) return;
+    settled = true;
+    const name = input.value.trim();
+    if (!name || name === currentTitle) {
+      restore();
+      return;
+    }
+    labelEl.textContent = name; // optimistic; the watcher confirms or corrects it
+    input.replaceWith(labelEl);
+    const res = await window.meshAPI.rename(sessionId, name);
+    if (!res || !res.ok) {
+      labelEl.textContent = currentTitle;
+      labelEl.classList.add('rename-failed');
+      setTimeout(() => labelEl.classList.remove('rename-failed'), 1200);
+    }
+    endEditing();
+  };
+
+  const cancel = () => {
+    if (settled) return;
+    settled = true;
+    restore();
+  };
+
+  input.addEventListener('keydown', (e) => {
+    e.stopPropagation();
+    if (e.key === 'Enter') commit();
+    else if (e.key === 'Escape') cancel();
+  });
+  input.addEventListener('blur', commit);
+  input.addEventListener('click', (e) => e.stopPropagation());
+  input.addEventListener('dblclick', (e) => e.stopPropagation());
+}
+
 function age(ms) {
   if (!ms) return '';
   const s = Math.max(0, (Date.now() - ms) / 1000);
@@ -288,14 +369,33 @@ function makeRow(row) {
 
   if (row.tabId && tabs.has(row.tabId)) node.classList.add('open');
 
+  // Double-click renames, so a click that would *spawn* a tab has to wait long enough
+  // to find out whether a second click is coming — otherwise every rename leaves a
+  // stray `claude --resume` behind. Focusing an already-open tab is free and
+  // idempotent, so that path stays instant and skips the delay entirely.
+  let openTimer = null;
   node.addEventListener('click', () => {
-    // A live session whose pid resolves to one of our tabs is already on screen —
-    // focus it instead of spawning a duplicate `claude --resume` of the same id.
     if (row.tabId && tabs.has(row.tabId)) {
       setActive(row.tabId);
       return;
     }
-    openTab({ resumeSessionId: row.sessionId, title: row.title, launchCwd: row.cwd });
+    clearTimeout(openTimer);
+    openTimer = setTimeout(() => {
+      openTimer = null;
+      openTab({
+        resumeSessionId: row.sessionId,
+        resumeName: row.customTitle, // only a real name carries over, never an AI title
+        title: row.title,
+        launchCwd: row.cwd,
+      });
+    }, 220);
+  });
+
+  node.addEventListener('dblclick', (e) => {
+    e.preventDefault();
+    clearTimeout(openTimer);
+    openTimer = null;
+    beginRename(label, row.sessionId, row.title);
   });
   node.addEventListener('contextmenu', (e) => {
     e.preventDefault();
@@ -320,11 +420,19 @@ function makeGroup(label, count, collapsible, open, onToggle) {
 function syncTabLabels(visible) {
   for (const row of visible) {
     const tab = row.tabId && tabs.get(row.tabId);
-    if (tab) tab.labelEl.textContent = row.title;
+    if (!tab) continue;
+    // Remember which session the tab is running so its label can be renamed directly.
+    tab.sessionId = row.sessionId;
+    tab.title = row.title;
+    if (tab.labelEl.isConnected) tab.labelEl.textContent = row.title;
   }
 }
 
 function render() {
+  if (editingSessionId) {
+    renderPending = true;
+    return;
+  }
   const visible = projectOnly ? rows.filter((r) => r.isCurrentProject) : rows;
   listEl.replaceChildren();
   syncTabLabels(visible);

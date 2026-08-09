@@ -15,4 +15,5 @@ contextBridge.exposeInMainWorld('meshAPI', {
   list: () => ipcRenderer.invoke('sessions:list'),
   onUpdate: (callback) => ipcRenderer.on('sessions-update', (event, rows) => callback(rows)),
   reveal: (sessionId) => ipcRenderer.send('sessions:reveal', sessionId),
+  rename: (sessionId, name) => ipcRenderer.invoke('sessions:rename', { sessionId, name }),
 });

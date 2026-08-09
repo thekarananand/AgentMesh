@@ -7,6 +7,8 @@ Electron app: tabbed xterm.js terminals, each backed by its own node-pty running
 - `preload.js` — contextBridge, exposes `window.ptyAPI` (per-tab terminal IO, keyed by `tabId`) and `window.meshAPI` (sessions)
 - `renderer.js` — tab manager, xterm.js setup + theme, cell measurement, fit logic, sidebar render, sidebar resizer
 - `sessions.js` — reads `~/.claude/sessions/*.json` + `history.jsonl` + tails `~/.claude/projects/*/*.jsonl` for title/branch/cwd; pure Node, no Electron deps, unit-testable standalone
+- `rename.js` — renames a session in sync with the CLI: control socket for live ones, transcript records for dead ones; pure Node
+- `autoname.js` — promotes a session's AI title into its actual name so no session stays on its cwd-derived autoname
 - `index.html` — shell page, sidebar + terminal split layout
 - `titlebar.js` — shared `HEADER_HEIGHT` constant (main + preload both require it)
 
@@ -16,6 +18,51 @@ Electron app: tabbed xterm.js terminals, each backed by its own node-pty running
 - `~/.claude/projects/<slug>/<sessionId>.jsonl` — transcripts. **Explicitly unstable format per Anthropic docs ("changes between versions")**, so every read is defensive (try/catch around JSON.parse per line, never throw). Only tail the last ~96KB (`tailRead`) — these files grow unbounded and we only want the trailing `ai-title`/`mode`/`cwd` records, not the whole conversation.
 - Title priority: custom `--name`/`/rename` (`nameSource: 'user'` in the live registry) > AI-generated `ai-title` record > first prompt from history > raw session id.
 
+## Session rename — the UDS control socket
+
+Claude Code exposes an undocumented control channel on the per-session socket in
+`~/.claude/sessions/<pid>.json` (`messagingSocketPath`, i.e. `/tmp/cc-socks/<pid>.sock`).
+One newline-terminated JSON line renames a live session:
+
+```json
+{"type":"control","action":"rename","name":"my-name","session_id":"<uuid>"}
+```
+
+- `session_id` is optional in the protocol but **always send it** — Claude Code validates it and
+  drops the message on mismatch. A pid file can outlive its process and the socket path is keyed
+  on a pid the OS is free to reuse.
+- There is **no ack**. A flushed write is the strongest signal available; confirmation arrives out
+  of band when the CLI rewrites its pid file and `sessions.watch()` fires.
+- One write updates everything at once: prompt-box banner, terminal title (OSC 0), the pid
+  registry, and two transcript records (`custom-title` + `agent-name`). Same pipeline `/rename`
+  (alias `/name`) uses.
+
+`rename.js` picks the path: socket for live sessions, else append those same two records to the
+transcript. Verified that the CLI's own `claude --resume` picker reads back an appended
+`custom-title`, so the archived path is genuinely in sync, not a local shadow.
+
+**`nameSource` semantics in the pid registry** — `'derived'` means the cwd-derived autoname
+(`agentmesh-da`); the key is **absent entirely** once a name is set on purpose. `'user'` belongs
+to the *daemon/background-job* record, a different store — testing for it against the pid registry
+never matches.
+
+Resume restores a custom title on its own, but the registry name is minted fresh at startup and
+falls back to the derived autoname, so `spawnTab` passes `--name` alongside `--resume` when the
+row carries a real name.
+
+## Always-named sessions (`autoname.js`)
+
+Claude Code has **no setting** to force session naming — checked the whole settings key space.
+`/rename` with no argument generates a name, but only when a human types it, and the `ai-title`
+record it generates on its own is never promoted to the session's *name*.
+
+So AgentMesh promotes it: `pushSessions()` runs `autoName()`, which pushes a session's AI title
+(or, before that exists, its first prompt) into the name over the control socket, kebab-cased to
+match Claude Code's own generated-name style. Anything already deliberately named is never
+touched, and each session is attempted once per app run so a failing rename can't retry-storm.
+`SCOPE` is `'tabs'` (only sessions in our own tabs); `'all'` covers every live session on the
+machine, including ones started in another terminal.
+
 ## Sidebar behavior
 - Each tab owns a real pty running its own `claude` — tabs are not one TUI switched with `/resume`. That's what makes them independently interruptible and closable.
 - Click a row → if it's already bound to an open tab, focus that tab; otherwise open a **new** tab running `claude --resume <sessionId>` in the session's own cwd.
@@ -23,6 +70,12 @@ Electron app: tabbed xterm.js terminals, each backed by its own node-pty running
 - Bound tabs get relabelled from session metadata (`syncTabLabels`), so the tab strip shows real titles instead of `session 3`.
 - `RECENT` group is collapsible and **collapsed by default** — live agents are the point, history is on demand. `LIVE` never collapses.
 - Right-click → reveals the session's cwd in Finder (`sessions:reveal`).
+- Double-click a row (or a tab label) → inline rename. Because double-click renames, a click that
+  would *spawn* a tab waits 220ms to see whether a second click is coming — otherwise every rename
+  leaves a stray `claude --resume` behind. Focusing an already-open tab is idempotent, so that
+  path stays instant.
+- `render()` is suppressed while an inline edit is open (`editingSessionId`) and flushes one
+  repaint on close — the 4s poll would otherwise rip the input out from under the cursor.
 - Live sessions always sort first, then by `updatedAt` descending.
 - `sessions.watch()` combines `fs.watch` (instant on most changes) with a 4s `setInterval` fallback — `fs.watch` misses status flips inside `sessions/*.json` on some macOS setups, poll covers the gap. Watch callback is debounced 250ms since writes land in bursts.
 - Sizing runs against `#tabs-content`'s `clientWidth`, never `window.innerWidth` — the sidebar eats part of the window, and it's user-resizable (180–520px, persisted in `localStorage`), so no constant can stand in for it.

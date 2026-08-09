@@ -152,6 +152,24 @@
     .badge-ai { color: #c162de; }
     .badge-name { color: #4aa5f0; }
 
+    /* Inline rename, used in both the sidebar row and the tab strip — it stands in
+       for a label, so it has to sit on the same baseline and eat no extra height. */
+    .rename-input {
+      -webkit-app-region: no-drag;
+      flex: 1 1 auto;
+      min-width: 0;
+      font-family: inherit;
+      font-size: inherit;
+      color: #d7dae0;
+      background: #00000040;
+      border: 1px solid #4aa5f0;
+      border-radius: 3px;
+      outline: none;
+      padding: 0 4px;
+      margin: -1px 0;
+    }
+    .rename-failed { color: #e05561; }
+
     #empty { padding: 16px 12px; font-size: 11px; color: #5c6370; }
 
     /* ---------------------------------------------------------- terminal pane */
