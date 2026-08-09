@@ -12,6 +12,8 @@
       --chrome-bg: #1b1e24;
       /* one terminal cell, measured at runtime in renderer.js */
       --cell-w: 8px;
+      /* traffic-light strip; renderer overwrites this from titlebar.js */
+      --header-h: 36px;
     }
 
     /* Inter everywhere except the terminal itself, which stays monospace. */
@@ -54,25 +56,28 @@
     body.resizing #terminal-pane { pointer-events: none; }
 
     #sidebar-header {
-      height: 36px;
+      height: var(--header-h);
       flex: 0 0 auto;
       display: flex;
       align-items: flex-end;
-      justify-content: space-between;
+      gap: 10px;
       padding: 0 12px 6px 84px; /* left pad clears the traffic lights */
       font-size: 10px;
       letter-spacing: 0.08em;
       color: #5c6370;
     }
+    #count { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-    #filter {
+    #filter, #new-session {
       -webkit-app-region: no-drag;
+      flex: 0 0 auto;
       cursor: pointer;
       color: #5c6370;
       user-select: none;
     }
-    #filter:hover { color: #abb2bf; }
+    #filter:hover, #new-session:hover { color: #abb2bf; }
     #filter.on { color: #4aa5f0; }
+    #new-session { font-size: 14px; line-height: 10px; }
 
     #list {
       flex: 1 1 auto;
@@ -108,6 +113,7 @@
     .chev.open { transform: rotate(90deg); }
 
     .row {
+      position: relative;
       padding: 6px 12px 7px 12px;
       cursor: pointer;
       border-left: 2px solid transparent;
@@ -139,6 +145,24 @@
     }
     .dot.idle { background: #8cc265; }
     .dot.busy { background: #d18f52; }
+
+    /* Closing is only meaningful for a session we're actually hosting, so the button
+       exists only on open rows — everything else has no terminal to close. */
+    .row-close {
+      position: absolute;
+      top: 5px;
+      right: 8px;
+      width: 15px;
+      height: 15px;
+      border-radius: 3px;
+      text-align: center;
+      line-height: 15px;
+      font-size: 12px;
+      color: #5c6370;
+      opacity: 0;
+    }
+    .row:hover .row-close { opacity: 1; }
+    .row-close:hover { background: #ffffff1f; color: #e05561; }
 
     .row-meta {
       font-size: 10px;
@@ -183,70 +207,14 @@
       flex-direction: column;
     }
 
-    #tabbar {
-      height: 36px;
+    /* No tab strip: sessions are switched from the sidebar. This is only here so the
+       window still has something to drag by, and so the terminal clears the traffic
+       lights the way the sidebar header does. */
+    #drag-strip {
+      height: var(--header-h);
       flex: 0 0 auto;
-      display: flex;
-      align-items: flex-end;
-      gap: 2px;
-      padding: 0 8px 0 8px;
-      background: var(--chrome-bg);
       -webkit-app-region: drag;
-      overflow-x: auto;
-      overflow-y: hidden;
     }
-    #tabbar::-webkit-scrollbar { display: none; }
-
-    .tab {
-      -webkit-app-region: no-drag;
-      flex: 0 0 auto;
-      max-width: 168px;
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      padding: 5px 8px 6px 10px;
-      margin-bottom: 0;
-      font-size: 11px;
-      color: #5c6370;
-      border-radius: 6px 6px 0 0;
-      cursor: pointer;
-      white-space: nowrap;
-    }
-    .tab:hover { color: #abb2bf; background: #ffffff0a; }
-    .tab.active { color: #d7dae0; background: #ffffff14; }
-
-    .tab-label {
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-
-    .tab-close {
-      flex: 0 0 auto;
-      width: 14px;
-      height: 14px;
-      border-radius: 3px;
-      text-align: center;
-      line-height: 14px;
-      color: #5c6370;
-    }
-    .tab-close:hover { background: #ffffff1f; color: #e05561; }
-
-    .tab-new {
-      -webkit-app-region: no-drag;
-      flex: 0 0 auto;
-      width: 20px;
-      height: 20px;
-      margin-bottom: 6px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      color: #5c6370;
-      border-radius: 4px;
-      cursor: pointer;
-      font-size: 13px;
-    }
-    .tab-new:hover { color: #abb2bf; background: #ffffff0a; }
 
     #tabs-content {
       flex: 1 1 auto;
@@ -267,6 +235,80 @@
       visibility: hidden;
       pointer-events: none;
     }
+
+    /* ------------------------------------------------------------- welcome pane */
+    /* Shown whenever no session is open — on a cold launch, and again once the last
+       terminal exits. Nothing is spawned until a directory is chosen, because a
+       session's cwd decides which project it belongs to and can't be changed after. */
+
+    #welcome {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 18px;
+      padding: 24px;
+      box-sizing: border-box;
+      text-align: center;
+    }
+    #welcome.hidden { display: none; }
+
+    #welcome-title { font-size: 15px; color: #d7dae0; letter-spacing: 0.02em; }
+    #welcome-sub { font-size: 11px; color: #5c6370; margin-top: -12px; }
+
+    #pick-dir {
+      -webkit-app-region: no-drag;
+      font: inherit;
+      font-size: 12px;
+      color: #d7dae0;
+      background: #ffffff0f;
+      border: 1px solid #ffffff1f;
+      border-radius: 6px;
+      padding: 7px 14px;
+      cursor: pointer;
+    }
+    #pick-dir:hover { background: #ffffff1a; border-color: #4aa5f0; }
+
+    #recent-dirs {
+      width: 100%;
+      max-width: 420px;
+      max-height: 40%;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+    }
+    #recent-dirs::-webkit-scrollbar { width: 6px; }
+    #recent-dirs::-webkit-scrollbar-thumb { background: #ffffff14; border-radius: 3px; }
+
+    .recent-label {
+      font-size: 9px;
+      letter-spacing: 0.1em;
+      color: #4f5666;
+      text-align: left;
+      padding: 0 8px 4px;
+    }
+
+    .recent-dir {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      padding: 5px 8px;
+      border-radius: 4px;
+      cursor: pointer;
+      text-align: left;
+    }
+    .recent-dir:hover { background: #ffffff0d; }
+    .recent-dir .name { font-size: 12px; color: #d7dae0; }
+    .recent-dir .path {
+      font-size: 10px;
+      color: #5c6370;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
   </style>
 </head>
 <body>
@@ -274,15 +316,21 @@
     <div id="sidebar-header">
       <span id="count">SESSIONS</span>
       <span id="filter" title="Toggle: this project only / all projects">ALL</span>
+      <span id="new-session" title="New session in another folder">+</span>
     </div>
     <div id="list"></div>
     <div id="sidebar-resizer"></div>
   </div>
   <div id="terminal-pane">
-    <div id="tabbar">
-      <div id="tab-new" class="tab-new" title="New session">+</div>
+    <div id="drag-strip"></div>
+    <div id="tabs-content">
+      <div id="welcome">
+        <div id="welcome-title">AgentMesh</div>
+        <div id="welcome-sub">Pick a folder to start a Claude Code session in.</div>
+        <button id="pick-dir">Open folder…</button>
+        <div id="recent-dirs"></div>
+      </div>
     </div>
-    <div id="tabs-content"></div>
   </div>
   <script src="node_modules/xterm/lib/xterm.js"></script>
   <script src="renderer.js"></script>

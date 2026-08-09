@@ -16,4 +16,5 @@ contextBridge.exposeInMainWorld('meshAPI', {
   onUpdate: (callback) => ipcRenderer.on('sessions-update', (event, rows) => callback(rows)),
   reveal: (sessionId) => ipcRenderer.send('sessions:reveal', sessionId),
   rename: (sessionId, name) => ipcRenderer.invoke('sessions:rename', { sessionId, name }),
+  pickDirectory: () => ipcRenderer.invoke('dialog:pick-directory'),
 });

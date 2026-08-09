@@ -43,19 +43,22 @@ function el(tag, className, text) {
   return n;
 }
 
+document.documentElement.style.setProperty('--header-h', `${window.ptyAPI.headerHeight}px`);
+
 // --------------------------------------------------------------------- tabs
 //
 // Each tab owns a real pty process in the main process (see main.js `spawnTab`).
-// Switching tabs never touches the pty — every tab's shell keeps running and
-// keeps its own scrollback, it's just its xterm host div that toggles hidden.
+// Switching tabs never touches the pty — every terminal keeps running and keeps its
+// own scrollback, it's just its xterm host div that toggles hidden.
+//
+// There is no tab strip. The sidebar is the switcher: it already lists every session
+// on the machine and marks the ones we're hosting, so a second row of the same
+// sessions along the top was showing the user the same thing twice.
 
-const tabbarEl = document.getElementById('tabbar');
-const tabNewEl = document.getElementById('tab-new');
 const contentEl = document.getElementById('tabs-content');
 
-const tabs = new Map(); // tabId -> { term, host, tabEl }
+const tabs = new Map(); // tabId -> { term, host, sessionId, title }
 let activeTabId = null;
-let tabCounter = 0;
 
 function measureCell(term) {
   const core = term._core;
@@ -82,10 +85,8 @@ window.addEventListener('resize', fitAll);
 function setActive(tabId) {
   if (!tabs.has(tabId)) return;
   activeTabId = tabId;
-  for (const [id, tab] of tabs) {
-    tab.host.classList.toggle('hidden', id !== tabId);
-    tab.tabEl.classList.toggle('active', id === tabId);
-  }
+  for (const [id, tab] of tabs) tab.host.classList.toggle('hidden', id !== tabId);
+  showWelcome(false);
   tabs.get(tabId).term.focus();
 }
 
@@ -95,20 +96,18 @@ function closeTab(tabId) {
   window.ptyAPI.close(tabId);
   tab.term.dispose();
   tab.host.remove();
-  tab.tabEl.remove();
   tabs.delete(tabId);
 
-  if (activeTabId === tabId) {
-    const next = tabs.keys().next().value;
-    if (next) setActive(next);
-    else openTab({}); // never leave zero tabs open
-  }
+  if (activeTabId !== tabId) return;
+  activeTabId = null;
+  const next = tabs.keys().next().value;
+  // Zero terminals is a legitimate state now: quitting Claude Code closes its
+  // terminal, and what's left is the same picker the app launches with.
+  if (next) setActive(next);
+  else showWelcome(true);
 }
 
 function openTab(opts) {
-  tabCounter += 1;
-  const label = opts.title || `session ${tabCounter}`;
-
   const host = el('div', 'term-host hidden');
   contentEl.appendChild(host);
 
@@ -122,15 +121,8 @@ function openTab(opts) {
   });
   term.open(host);
 
-  const tabEl = el('div', 'tab');
-  const labelEl = el('span', 'tab-label', label);
-  const closeEl = el('span', 'tab-close', '×');
-  tabEl.appendChild(labelEl);
-  tabEl.appendChild(closeEl);
-  tabbarEl.insertBefore(tabEl, tabNewEl);
-
   window.ptyAPI.create(opts).then((tabId) => {
-    tabs.set(tabId, { term, host, tabEl, labelEl });
+    tabs.set(tabId, { term, host, sessionId: opts.resumeSessionId || null, title: opts.title || null });
     term.onData((data) => window.ptyAPI.sendInput(tabId, data));
 
     // Shift+Enter (and Ctrl+Enter) insert a newline instead of submitting. xterm sends
@@ -153,35 +145,72 @@ function openTab(opts) {
       window.ptyAPI.sendInput(tabId, '\x1b\r');
       return false;
     });
-    tabEl.addEventListener('click', () => setActive(tabId));
-    // Renaming from the tab strip needs a session to talk to; syncTabLabels attaches
-    // one as soon as the tab's `claude` registers itself.
-    labelEl.addEventListener('dblclick', (e) => {
-      e.stopPropagation();
-      const tab = tabs.get(tabId);
-      if (!tab || !tab.sessionId) return;
-      beginRename(labelEl, tab.sessionId, tab.title || labelEl.textContent);
-    });
-    closeEl.addEventListener('click', (e) => {
-      e.stopPropagation();
-      closeTab(tabId);
-    });
     setActive(tabId);
     fitAll();
   });
 }
 
-tabNewEl.addEventListener('click', () => openTab({}));
+// ------------------------------------------------------------------ welcome pane
+
+const welcomeEl = document.getElementById('welcome');
+const pickDirEl = document.getElementById('pick-dir');
+const recentDirsEl = document.getElementById('recent-dirs');
+
+function showWelcome(on) {
+  welcomeEl.classList.toggle('hidden', !on);
+  if (on) renderRecentDirs();
+}
+
+// A session's cwd is fixed at spawn and decides which project it belongs to, so the
+// folder is asked for up front rather than inherited from wherever the app happened
+// to be launched from.
+async function newSessionHere(dir) {
+  const target = dir || (await window.meshAPI.pickDirectory());
+  if (!target) return;
+  openTab({ launchCwd: target });
+}
+
+pickDirEl.addEventListener('click', () => newSessionHere());
+document.getElementById('new-session').addEventListener('click', () => newSessionHere());
+
+// Every folder that has ever held a session is already in the sidebar's data, so the
+// picker gets a shortcut list for free — no separate history to keep in sync.
+function renderRecentDirs() {
+  const seen = new Set();
+  const dirs = [];
+  for (const row of rows) {
+    if (!row.cwd || seen.has(row.cwd)) continue;
+    seen.add(row.cwd);
+    dirs.push(row.cwd);
+    if (dirs.length >= 8) break;
+  }
+
+  recentDirsEl.replaceChildren();
+  if (!dirs.length) return;
+
+  recentDirsEl.appendChild(el('div', 'recent-label', 'RECENT FOLDERS'));
+  for (const dir of dirs) {
+    const node = el('div', 'recent-dir');
+    node.appendChild(el('span', 'name', dir.split('/').filter(Boolean).pop() || dir));
+    node.appendChild(el('span', 'path', dir));
+    node.title = dir;
+    node.addEventListener('click', () => newSessionHere(dir));
+    recentDirsEl.appendChild(node);
+  }
+}
 
 window.ptyAPI.onData((tabId, data) => {
   tabs.get(tabId)?.term.write(data);
 });
 
+// The pty is Claude Code itself (main.js execs it), so this fires the moment the user
+// quits Claude — the terminal goes with it rather than falling back to a bare shell.
 window.ptyAPI.onExit((tabId) => {
   if (tabs.has(tabId)) closeTab(tabId);
 });
 
-openTab({}); // first tab on launch
+// The opening state is set at the bottom of this file, once `rows` exists — the
+// welcome pane reads it for its recent-folder list.
 
 // ----------------------------------------------------------- sidebar resizing
 
@@ -309,21 +338,13 @@ function beginRename(labelEl, sessionId, currentTitle) {
   input.addEventListener('dblclick', (e) => e.stopPropagation());
 }
 
-function age(ms) {
-  if (!ms) return '';
-  const s = Math.max(0, (Date.now() - ms) / 1000);
-  if (s < 60) return `${Math.floor(s)}s`;
-  if (s < 3600) return `${Math.floor(s / 60)}m`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h`;
-  return `${Math.floor(s / 86400)}d`;
-}
-
+// Where the session is and what it's working on — not how old it is or what pid it
+// happens to have. Both were bookkeeping the user has no use for.
 function meta(row) {
-  const parts = [age(row.updatedAt)];
+  const parts = [];
   if (row.project) parts.push(row.project);
   if (row.gitBranch && row.gitBranch !== 'HEAD') parts.push(row.gitBranch);
   if (row.promptCount) parts.push(`${row.promptCount} prompts`);
-  if (row.live && row.pid) parts.push(`pid ${row.pid}`);
 
   const n = el('div', 'row-meta');
   parts.forEach((p, i) => {
@@ -367,7 +388,16 @@ function makeRow(row) {
     .filter(Boolean)
     .join('\n');
 
-  if (row.tabId && tabs.has(row.tabId)) node.classList.add('open');
+  if (row.tabId && tabs.has(row.tabId)) {
+    node.classList.add('open');
+    const close = el('span', 'row-close', '×');
+    close.title = 'Close this terminal';
+    close.addEventListener('click', (e) => {
+      e.stopPropagation();
+      closeTab(row.tabId);
+    });
+    node.appendChild(close);
+  }
 
   // Double-click renames, so a click that would *spawn* a tab has to wait long enough
   // to find out whether a second click is coming — otherwise every rename leaves a
@@ -415,16 +445,14 @@ function makeGroup(label, count, collapsible, open, onToggle) {
   return node;
 }
 
-// Tab strip shows generic labels until a session registers; once a row binds to a
-// tab we know its real title, so relabel the tab from the session metadata.
-function syncTabLabels(visible) {
+// Bind each terminal to the session actually running in it, once that session
+// registers itself. A tab opened on a blank folder doesn't know its session id yet.
+function syncTabs(visible) {
   for (const row of visible) {
     const tab = row.tabId && tabs.get(row.tabId);
     if (!tab) continue;
-    // Remember which session the tab is running so its label can be renamed directly.
     tab.sessionId = row.sessionId;
     tab.title = row.title;
-    if (tab.labelEl.isConnected) tab.labelEl.textContent = row.title;
   }
 }
 
@@ -435,7 +463,8 @@ function render() {
   }
   const visible = projectOnly ? rows.filter((r) => r.isCurrentProject) : rows;
   listEl.replaceChildren();
-  syncTabLabels(visible);
+  syncTabs(visible);
+  if (!welcomeEl.classList.contains('hidden')) renderRecentDirs();
 
   if (!visible.length) {
     const empty = el('div', null, 'No sessions found.');
@@ -482,5 +511,4 @@ window.meshAPI.list().then((next) => {
   render();
 });
 
-// keep relative ages honest without waiting on a filesystem event
-setInterval(render, 30000);
+showWelcome(true); // nothing is spawned until a folder is picked

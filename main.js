@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, shell: electronShell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell: electronShell } = require('electron');
 const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
@@ -92,7 +92,22 @@ function shellQuote(s) {
 // that's what makes tabs independently interruptible and closable.
 function spawnTab({ resumeSessionId, resumeName, launchCwd } = {}) {
   const tabId = crypto.randomUUID();
-  const proc = pty.spawn(shellBin, [], {
+
+  // `--resume` restores the custom title into the resume picker on its own, but the
+  // live registry name is minted fresh at startup and falls back to the cwd-derived
+  // autoname. Passing --name keeps the prompt box and terminal title in agreement
+  // with the row that was clicked.
+  let cmd = 'claude';
+  if (resumeSessionId) cmd += ` --resume ${resumeSessionId}`;
+  if (resumeSessionId && resumeName) cmd += ` --name ${shellQuote(resumeName)}`;
+
+  // A login shell is still worth paying for — it's what puts `claude` and the rest of
+  // the user's toolchain on PATH — but `exec` hands the pty over to Claude Code, so
+  // quitting Claude ends the terminal instead of dropping the user at a bare prompt
+  // in a tab that no longer stands for anything.
+  const args = os.platform() === 'win32' ? ['-Command', cmd] : ['-l', '-c', `exec ${cmd}`];
+
+  const proc = pty.spawn(shellBin, args, {
     name: 'xterm-color',
     cols: 80,
     rows: 30,
@@ -111,16 +126,6 @@ function spawnTab({ resumeSessionId, resumeName, launchCwd } = {}) {
   });
 
   ptys.set(tabId, proc);
-
-  // `--resume` restores the custom title into the resume picker on its own, but the
-  // live registry name is minted fresh at startup and falls back to the cwd-derived
-  // autoname. Passing --name keeps the prompt box and terminal title in agreement
-  // with the row that was clicked.
-  let cmd = 'claude';
-  if (resumeSessionId) cmd += ` --resume ${resumeSessionId}`;
-  if (resumeSessionId && resumeName) cmd += ` --name ${shellQuote(resumeName)}`;
-  proc.write(cmd + '\r');
-
   return tabId;
 }
 
@@ -159,6 +164,15 @@ function createWindow() {
   });
 
   ipcMain.handle('sessions:list', () => listAnnotated());
+
+  ipcMain.handle('dialog:pick-directory', async () => {
+    const res = await dialog.showOpenDialog(win, {
+      title: 'Start a session in…',
+      buttonLabel: 'Open',
+      properties: ['openDirectory', 'createDirectory'],
+    });
+    return res.canceled || !res.filePaths.length ? null : res.filePaths[0];
+  });
 
   ipcMain.on('sessions:reveal', (event, sessionId) => {
     const row = sessions.list(cwd).find((s) => s.sessionId === sessionId);
