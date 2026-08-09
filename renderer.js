@@ -313,6 +313,58 @@ let rows = [];
 let projectOnly = false;
 let recentOpen = false; // history is noise until asked for; live agents are the point
 
+// ------------------------------------------------------------- status glyphs
+//
+// Modelled on GitHub Actions' run status: amber spinner in flight, green dot on
+// landing, muted dot for archived. Octicon paths are the shipped 16px ones from
+// @primer/octicons (`dot-fill`), and the spinner is Primer's own Spinner markup —
+// a 25%-opacity ring plus a quarter-arc, rotated 1s linear.
+const SPINNER_SVG =
+  '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true">' +
+  '<circle cx="8" cy="8" r="7" stroke="currentColor" stroke-opacity="0.25" stroke-width="2"/>' +
+  '<path d="M15 8a7.002 7.002 0 0 0-7-7" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>' +
+  '</svg>';
+const DOT_SVG =
+  '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">' +
+  '<path d="M8 4a4 4 0 1 1 0 8 4 4 0 0 1 0-8Z"/>' +
+  '</svg>';
+
+// busy -> idle is the interesting edge ("it finished, it's your turn"), but rows are
+// rebuilt from scratch on every 4s poll, so the transition has to be remembered
+// outside the DOM. `lastStatus` holds the previous poll's status per session;
+// `landed` records the sessions whose arrival pulse has already played, so a row that
+// sits idle for an hour doesn't blink once a minute.
+const lastStatus = new Map();
+const landed = new Set();
+
+function statusIcon(row) {
+  const node = el('span', 'status');
+  const state = row.live ? (row.status === 'busy' ? 'busy' : 'idle') : 'dead';
+  const prev = lastStatus.get(row.sessionId);
+
+  if (state === 'busy') {
+    node.classList.add('busy');
+    node.innerHTML = SPINNER_SVG;
+    // Negative delay lines every spinner up on the same rotation angle no matter
+    // when its row was built — Primer's computeSyncDelay, same trick.
+    node.firstChild.style.animationDelay = `-${performance.now() % 1000}ms`;
+    landed.delete(row.sessionId); // a fresh run earns a fresh landing pulse
+  } else {
+    node.innerHTML = DOT_SVG;
+    if (state === 'idle') {
+      node.classList.add('idle');
+      if (prev === 'busy' && !landed.has(row.sessionId)) {
+        landed.add(row.sessionId);
+        node.classList.add('landed');
+      }
+    }
+  }
+
+  lastStatus.set(row.sessionId, state);
+  node.title = state === 'busy' ? 'Working' : state === 'idle' ? 'Idle — waiting on you' : 'Not running';
+  return node;
+}
+
 // ------------------------------------------------------------------- renaming
 //
 // A rename is handed to Claude Code rather than stored here: live sessions take it
@@ -447,9 +499,7 @@ function makeRow(row) {
   if (!row.live) node.classList.add('dim');
 
   const title = el('div', 'row-title');
-  const dot = el('span', 'dot');
-  if (row.live) dot.classList.add(row.status === 'busy' ? 'busy' : 'idle');
-  title.appendChild(dot);
+  title.appendChild(statusIcon(row));
 
   const label = el('span', null, row.title);
   if (row.titleSource === 'ai') label.classList.add('badge-ai');

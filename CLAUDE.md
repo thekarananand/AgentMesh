@@ -153,9 +153,34 @@ branch on `kind` from the pid registry (`'interactive'` | `'bg'`):
 Background agents also differ in the registry: `kind: 'bg'`, a `jobId`, no `nameSource`, and
 `name` is the **entire dispatch prompt including newlines** — `liveCustomName()` collapses
 whitespace so one row stays one line.
+
+## Pre-warmed spares — the phantom duplicate row
+
+The bg daemon keeps a pool of **pre-warmed workers** so a FleetView dispatch skips cold start,
+and **each spare registers a complete `sessions/<pid>.json` before anyone dispatches anything**.
+That is the "duplicate session": one extra live `bg` row per use of the agents menu, same cwd,
+named after nothing. Verified by spawning `claude agents` in a throwaway pty — opening the TUI
+alone added a pid file (`kind:'bg'`, `status:'idle'`, `name === jobId === sessionId.slice(0,8)`),
+and it vanished when the TUI closed. Nothing upstream to fix and no setting to disable prewarm;
+the fix is to not count spares as sessions.
+
+`~/.claude/daemon/roster.json` is the authoritative discriminator — `workers[short].dispatch`:
+
+- unclaimed spare → `source: 'spare'`, `seed.intent: ''`, `launch.args` with no `--` prompt
+- real dispatch → `source: 'fleet'`, `seed.intent` = the prompt, prompt after `--` in `launch.args`
+
+`readSpares()` in `sessions.js` builds the skip set from that; `looksUnclaimedSpare()` is the
+fallback for when the roster is missing or renames those fields (bg + `name === jobId`).
+Claiming rewrites the entry in place, so a spare that picks up work reappears on the next poll.
+
+Two processes per bg worker, both matching `claude bg-spare` in `ps` — argv does **not**
+distinguish claimed from unclaimed, so don't try to filter on it. Also: `claude agents`
+processes are `kind: 'bg'` too, and the process ancestry is
+`bg-spare` ← `bg-pty-host` ← `claude daemon run`.
 - Binding is by **pid ancestry**: one `ps -Ao pid=,ppid=` per refresh, then walk the live session's pid up its parent chain until it hits a tab's shell pid (`tabForPid` in `main.js`). The `claude` process sits 1–3 hops above the pty shell, so the 24-hop cap is generous.
 - `syncTabs` binds each open terminal to the session that registered inside it, which is what the inline rename and the row's close button act on.
 - Row meta is **where and what**, not bookkeeping: project, branch, prompt count. No relative age, no pid — both were noise, and dropping age also removed the 30s repaint timer that existed only to keep it honest.
+- Status glyph follows **GitHub Actions**: amber Primer spinner while busy, green dot on idle, muted dot when dead. Colors are Primer's own dark tokens (`--fgColor-attention #d29922`, `--fgColor-success #3fb950`, `--fgColor-muted #9198a1`), markup is Octicons' `dot-fill` plus Primer's Spinner ring+arc. Every spinner gets a **negative `animation-delay`** (`-${performance.now() % 1000}ms`) so rows built at different times rotate in phase — same trick as Primer's `computeSyncDelay`. The busy→idle flip fires a one-shot ring pulse (`.landed`), tracked in `lastStatus`/`landed` **outside the DOM** because `render()` rebuilds every row on the 4s poll and would otherwise re-pulse forever. `prefers-reduced-motion` kills both animations.
 - Open rows carry a hover `×` that closes that terminal. It exists only on rows we host; everything else has no terminal to close.
 - `RECENT` group is collapsible and **collapsed by default** — live agents are the point, history is on demand. `LIVE` never collapses.
 - Right-click → reveals the session's cwd in Finder (`sessions:reveal`).

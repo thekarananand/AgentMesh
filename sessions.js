@@ -16,6 +16,7 @@ const CLAUDE_DIR = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.cl
 const PROJECTS_DIR = path.join(CLAUDE_DIR, 'projects');
 const SESSIONS_DIR = path.join(CLAUDE_DIR, 'sessions');
 const HISTORY_FILE = path.join(CLAUDE_DIR, 'history.jsonl');
+const ROSTER_FILE = path.join(CLAUDE_DIR, 'daemon', 'roster.json');
 
 const TAIL_BYTES = 96 * 1024; // enough to catch ai-title + a metadata-bearing record
 const MAX_SESSIONS = 60;
@@ -39,6 +40,39 @@ function pidAlive(pid) {
   }
 }
 
+// The bg daemon keeps a pool of pre-warmed workers so a FleetView dispatch can start
+// without paying cold-start. Opening `claude agents` alone is enough to spawn one, and
+// every spare registers a complete `kind: 'bg'` pid file in sessions/ before anyone has
+// asked it to do anything — which is exactly the phantom row that appears next to a real
+// agent every time the agents menu is used. (Verified: opening the TUI added
+// `sessions/<pid>.json` with `name === jobId === sessionId.slice(0,8)`; it disappeared
+// again when the TUI closed.)
+//
+// daemon/roster.json is the authoritative tell. An unclaimed spare is
+// `dispatch.source: 'spare'` with an empty `seed.intent`; claiming rewrites the entry to
+// `source: 'fleet'` carrying the dispatch prompt.
+function readSpares() {
+  const raw = safeParse(readFileQuiet(ROSTER_FILE) || '');
+  if (!raw || !raw.workers) return null; // no roster — caller falls back to shape
+  const set = new Set();
+  for (const w of Object.values(raw.workers)) {
+    if (!w || !w.sessionId) continue;
+    const d = w.dispatch || {};
+    if (d.source !== 'spare') continue;
+    if (((d.seed && d.seed.intent) || '').trim()) continue; // claimed in place
+    set.add(w.sessionId);
+  }
+  return set;
+}
+
+// roster.json is internal state like everything else here, so if it's missing or a
+// version bump renames those fields, fall back to the registry shape of an unclaimed
+// spare: a bg session whose name is nothing but its own short job id. A real background
+// agent's name is its dispatch prompt.
+function looksUnclaimedSpare(raw) {
+  return raw.kind === 'bg' && Boolean(raw.jobId) && raw.name === raw.jobId;
+}
+
 function readLive() {
   const bySessionId = new Map();
   let files = [];
@@ -48,10 +82,13 @@ function readLive() {
     return bySessionId;
   }
 
+  const spares = readSpares();
+
   for (const f of files) {
     const raw = safeParse(readFileQuiet(path.join(SESSIONS_DIR, f)) || '');
     if (!raw || !raw.sessionId) continue;
     if (raw.pid && !pidAlive(raw.pid)) continue; // stale registry entry
+    if (spares ? spares.has(raw.sessionId) : looksUnclaimedSpare(raw)) continue;
     bySessionId.set(raw.sessionId, {
       pid: raw.pid,
       name: raw.name,

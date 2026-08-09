@@ -3,3 +3,6 @@ dist/
 out/
 *.log
 .DS_Store
+
+# agent scratch: worktrees + local settings, never part of the app
+.claude/

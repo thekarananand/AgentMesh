@@ -150,8 +150,8 @@
       border-left: 2px solid transparent;
     }
     .row:hover { background: #ffffff0d; }
-    .row.live { border-left-color: #8cc26580; }
-    .row.busy { border-left-color: #d18f52; }
+    .row.live { border-left-color: #3fb95080; }
+    .row.busy { border-left-color: #d29922; }
     /* session already owns a tab in this window — click focuses it, never respawns */
     .row.open { background: #ffffff0a; border-left-color: #4aa5f0; }
 
@@ -167,15 +167,44 @@
     }
     .row.dim .row-title { color: #abb2bf; }
 
-    .dot {
+    /* Status glyph follows GitHub Actions: an amber spinner while the run is in
+       flight, a green dot the moment it lands, a muted dot for anything archived.
+       Colors are Primer's own dark-theme tokens, not eyeballed —
+       @primer/primitives dist/css/functional/themes/dark.css:
+       --fgColor-attention #d29922, --fgColor-success #3fb950, --fgColor-muted #9198a1. */
+    .status {
       flex: 0 0 auto;
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      background: #4f5666;
+      display: inline-flex;
+      width: 12px;
+      height: 12px;
+      color: #9198a1;
     }
-    .dot.idle { background: #8cc265; }
-    .dot.busy { background: #d18f52; }
+    .status svg { display: block; width: 12px; height: 12px; }
+    .status.idle { color: #3fb950; }
+    .status.busy { color: #d29922; }
+
+    /* Primer's Spinner is 1s linear infinite. Each instance also gets a negative
+       animation-delay in JS so rows that mount at different times still rotate in
+       phase — GitHub does the same (computeSyncDelay in Spinner.tsx). */
+    @keyframes rotate-keyframes { to { transform: rotate(360deg); } }
+    .status.busy svg {
+      transform-origin: 50% 50%;
+      animation: rotate-keyframes 1s linear infinite;
+    }
+
+    /* "It came back" cue: one ring pulse on the first busy -> idle flip, so a
+       glance catches the handoff without having watched the spinner stop. Fired
+       once per session per app run — render() rebuilds every row on each 4s poll
+       and would otherwise re-trigger this forever. */
+    @keyframes status-land {
+      from { box-shadow: 0 0 0 0 #3fb95059; }
+      to   { box-shadow: 0 0 0 7px #3fb95000; }
+    }
+    .status.landed { border-radius: 50%; animation: status-land 900ms ease-out 1; }
+
+    @media (prefers-reduced-motion: reduce) {
+      .status.busy svg, .status.landed { animation: none; }
+    }
 
     /* Closing is only meaningful for a session we're actually hosting, so the button
        exists only on open rows — everything else has no terminal to close. */
