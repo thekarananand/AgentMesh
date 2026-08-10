@@ -173,6 +173,41 @@ function tailRead(file, bytes) {
   }
 }
 
+// `--fork-session` copies the transcript wholesale under a new id, custom title and
+// all, so a fork and its origin otherwise render as two identical cards. The copied
+// records keep the *original* session's id in their `sessionId` field while the file
+// is named after the new one — so a first line that disagrees with the filename is
+// the fork's parent. The first line of a transcript never changes, so cache forever.
+const forkCache = new Map(); // sessionId -> parent id | null
+
+function headRead(file, bytes = 8 * 1024) {
+  let fd;
+  try {
+    fd = fs.openSync(file, 'r');
+    const len = Math.min(bytes, fs.fstatSync(fd).size);
+    const buf = Buffer.alloc(len);
+    fs.readSync(fd, buf, 0, len, 0);
+    return buf.toString('utf8');
+  } catch {
+    return '';
+  } finally {
+    if (fd !== undefined) {
+      try {
+        fs.closeSync(fd);
+      } catch {}
+    }
+  }
+}
+
+function forkParent(file, sessionId) {
+  if (forkCache.has(sessionId)) return forkCache.get(sessionId);
+  const first = headRead(file).split('\n').find(Boolean);
+  const o = safeParse(first || '');
+  const parent = o && o.sessionId && o.sessionId !== sessionId ? o.sessionId : null;
+  forkCache.set(sessionId, parent);
+  return parent;
+}
+
 // Pull whatever metadata the tail happens to carry. Everything here is best-effort:
 // the record shapes are internal to Claude Code and change between versions.
 function scanTranscript(file) {
@@ -294,6 +329,7 @@ function list(currentCwd) {
       customTitle: custom || null,
       aiTitle: meta.aiTitle || null,
       file: t.file,
+      forkOf: forkParent(t.file, t.sessionId),
       intent: h.firstPrompt || null,
       lastPrompt: h.lastPrompt || null,
       promptCount: h.promptCount || 0,
@@ -328,6 +364,7 @@ function list(currentCwd) {
       customTitle: liveCustomName(l),
       aiTitle: null,
       file: null,
+      forkOf: null,
       intent: null,
       lastPrompt: null,
       promptCount: 0,

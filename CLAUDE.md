@@ -2,13 +2,55 @@
 
 Electron app: tabbed xterm.js terminals, each backed by its own node-pty running its own `claude`. Sidebar lists Claude Code sessions across all projects on the machine (live + recent), sourced from the CLI's own local state — not a terminal wrapper, a mesh view over every running/past `claude` session, with click-to-attach.
 
+## Intent — read this before proposing work
+
+Three goals at once, in this priority order. A change that serves one but breaks another is not a win.
+
+1. **Orchestration control plane for many agents.** The point is running several Claude Code
+   agents in parallel — across different projects, not just tabs on one repo — and being able to
+   see all of them, tell them apart, and eventually route work *between* them. The peer-message
+   socket documented below is the substrate for that, which is why it's mapped out in far more
+   detail than anything currently calls for. Terminal tabs are the plumbing, not the product.
+2. **A better daily driver than Terminal.app for Claude Code.** Whatever the orchestration story
+   becomes, this is the app the user actually lives in all day. Latency, key handling, fonts,
+   vibrancy and window chrome are product surface, not polish — a control plane nobody wants to
+   sit inside doesn't get used.
+3. **Shippable to other developers, not a personal hack.** Assume a fresh machine and someone
+   else's `~/.claude`. No hardcoded paths to this user's home, no assumption a given session,
+   project or CLI version exists. Everything read out of the CLI is version-fragile by nature, so
+   degrade to a working app with less information rather than throwing.
+
+Much of the work is filling gaps the CLI leaves — always-named sessions, real attach for bg
+agents, hiding phantom prewarm spares, cross-project visibility. That's the *source* of features,
+not the goal itself; a CLI gap is worth closing when it serves one of the three above.
+
+### Decided — do not relitigate
+
+- **Never fork, patch or vendor the `claude` binary.** Read its local state and speak its
+  protocols. Reading strings out of the shipped binary to *learn* the protocol is fine and
+  expected (see below); shipping a modified one is not.
+- **No direct mutation of `~/.claude` state files.** Writes go over the control socket, or append
+  records in the exact format the CLI itself writes (`custom-title`/`agent-name`) so its own
+  `--resume` picker reads them back. Never rewrite or hand-edit a pid registry, transcript or
+  `history.jsonl` in place.
+- **Local, single-user, no server.** No remote machines, no daemon of our own, no auth flow of our
+  own. Everything is this machine's filesystem and unix sockets, with exactly one exception:
+  a read-only `GET /api/oauth/usage` against the user's own Anthropic account, using the OAuth
+  token the CLI already stored — the same call `/usage` makes (see the plan-usage section). Nothing
+  is ever POSTed, no credential is written, no third party is contacted. Adding a *second* network
+  call is a new decision, not a precedent already set.
+- **Undocumented behavior must be verified on a live throwaway session before code depends on it.**
+  Binary strings tell you what to try; a real session tells you what happens. Anything in this file
+  that came from the binary was confirmed this way.
+
 ## Files
 - `main.js` — BrowserWindow config, per-tab node-pty spawn (`spawnTab`), pty env scrubbing, pid→tab binding (`parentMap`/`tabForPid`/`listAnnotated`), IPC wiring, session push to renderer
-- `preload.js` — contextBridge, exposes `window.ptyAPI` (per-tab terminal IO, keyed by `tabId`) and `window.meshAPI` (sessions)
+- `preload.js` — contextBridge, exposes `window.ptyAPI` (per-tab terminal IO, keyed by `tabId`) and `window.meshAPI` (sessions + plan usage)
 - `renderer.js` — tab manager, xterm.js setup + theme, cell measurement, fit logic, sidebar render, sidebar resizer
 - `sessions.js` — reads `~/.claude/sessions/*.json` + `history.jsonl` + tails `~/.claude/projects/*/*.jsonl` for title/branch/cwd; pure Node, no Electron deps, unit-testable standalone
 - `rename.js` — renames a session in sync with the CLI: control socket for live ones, transcript records for dead ones; pure Node
 - `autoname.js` — promotes a session's AI title into its actual name so no session stays on its cwd-derived autoname
+- `usage.js` — the account's plan windows (5h / weekly): credential read, `/api/oauth/usage` fetch, normalizing, poll + backoff; pure Node, the OAuth token never leaves it
 - `index.html` — shell page, sidebar + terminal split layout, welcome/folder-picker pane
 - `titlebar.js` — shared `HEADER_HEIGHT` constant (main + preload both require it)
 
@@ -106,6 +148,72 @@ The same socket that carries `control`/`rename` is a general inbox — this is t
 - Senders are identified by peer credentials on the socket (uid check, pid + ancestry read), and
   a message carrying `session_id` is dropped unless it matches the receiving session.
 
+## Plan usage — the sidebar footer (`usage.js`)
+
+The one **account-wide** fact in an app otherwise built out of per-session facts, which is why
+it lives in its own footer strip rather than on any row. Running six agents at once burns the
+5-hour window fast and the CLI can only answer for it from *inside* a session (`/usage`) — the
+wrong shape for a question about the account.
+
+**Source: `GET https://api.anthropic.com/api/oauth/usage`.** Exactly what the CLI's own
+`fetchUtilization` calls (5s timeout, `Content-Type: application/json`, `anthropic-beta:
+oauth-2025-04-20`). Verified live, HTTP 200:
+
+```json
+{ "five_hour": { "utilization": 8.0,  "resets_at": "2026-08-10T00:00:00.292938+00:00" },
+  "seven_day": { "utilization": 21.0, "resets_at": "2026-08-15T15:59:59.292960+00:00" },
+  "seven_day_opus": null, "seven_day_sonnet": null,
+  "extra_usage": { "is_enabled": false, "monthly_limit": null, "used_credits": null, … },
+  "limits": [ { "kind":"session", "group":"session", "percent":8, "severity":"normal",
+                "resets_at":"…", "scope":null, "is_active":false }, … ],
+  "spend": { … } }
+```
+
+- **Two unit conventions for one idea.** Top-level windows are `utilization` 0–100 with an ISO
+  `resets_at`. The CLI's *other* path — the `anthropic-ratelimit-unified-*` response headers —
+  uses a 0–1 fraction and epoch seconds. `normalize()` is the only place either shape is
+  touched; nothing downstream may assume one.
+- **Read the response by allowlist.** The live endpoint already returns keys the CLI's own list
+  doesn't cover (`tangelo`, `nimbus_quill`, `amber_ladder`, `seven_day_cowork`,
+  `seven_day_omelette` — unreleased, codenamed). Iterating whatever comes back would put mystery
+  bars in someone else's sidebar. `WINDOWS` in `usage.js` is that allowlist, and its order is the
+  render order.
+- `Number(null)` is `0`, not `NaN` — an unset `monthly_limit` reads as a limit of zero unless
+  null-checked first. Bit us once already.
+
+**Credentials — read, never written, never refreshed.** macOS Keychain, service
+`Claude Code-credentials`, one JSON blob: `{"claudeAiOauth":{accessToken, refreshToken, expiresAt,
+scopes, subscriptionType:"pro", rateLimitTier}}`. `subscriptionType` is the plan chip. Fallback
+for non-macOS is `~/.claude/.credentials.json` (the path the binary itself references). AgentMesh
+never rotates either — the CLI does that, and AgentMesh always has live sessions making it happen.
+The `security` read carries a timeout on purpose: if the Keychain item's ACL doesn't cover us the
+read blocks on a **GUI prompt**, and a hung poller is worse than a missing bar. The token stays
+inside `usage.js` and the main process; only normalized numbers cross the contextBridge.
+
+**Why the local-only path can't be the primary.** `~/.claude.json → cachedUsageUtilization` holds
+the same response body, but it's written from `loadPlanRateLimits` — i.e. **only when a human opens
+`/usage`**, throttled to one write per 5 min (`yey=300000`) and discarded on read past 1 h
+(`_ey=3600000`). It was absent entirely on this machine. Good as a cold-start seed and an offline
+fallback, nothing more. Header-derived utilization never touches disk at all — it lives in CLI
+process memory.
+
+**Polling.** 5 min (the CLI's own persist throttle), plus window focus and `spawnTab`, with a 60s
+floor between actual network calls so alt-tabbing can't turn into traffic. Failures back off
+exponentially to 30 min and keep serving the last good value flagged `stale` — the footer dims
+rather than vanishing. A 401 re-reads credentials once and retries once, since the CLI may have
+rotated the token underneath us. `ANTHROPIC_API_KEY` / Bedrock / Vertex / Foundry in the env means
+plan limits don't apply, and the footer renders nothing at all (`#usage:empty { display: none }`).
+
+**Footer UI.** Widest window first — `week` on top, `session` under it, sitting directly above the
+countdown that belongs to it. Bars are green / amber ≥75% / red ≥90%, the same three-state
+vocabulary as the row status glyphs. Other windows' reset dates live in each row's hover title so
+they don't fight for the one line underneath.
+
+`renderUsage()` is **not** part of `render()`: that rebuilds every row on the 4s session poll,
+while usage arrives on its own 5-minute cadence. The countdown is the **one timer in the sidebar** —
+60s, all the precision `3h 12m` has, writing a single text node. The row ages this file killed off
+were dropped because they cost a full repaint of every row; this costs one assignment.
+
 ## Local dev + testing
 
 - Repo is git-backed as of this work; feature work goes on a branch, not `main`.
@@ -114,6 +222,15 @@ The same socket that carries `control`/`rename` is a general inbox — this is t
   **second instance** instead (`nohup npm start > log 2>&1 &`); nothing in `main.js` takes a
   single-instance lock, and the two windows don't interfere. Kill only by the exact pid you
   launched.
+- **"The exact pid you launched" means the Electron pid, not the `npm start` pid.** `npm start`
+  → `node .bin/electron .` → the Electron main process; killing the npm wrapper tears the tree
+  down, and this is how the *user's* window got killed once by a cleanup aimed at a test instance.
+  Two further traps that made it hard to see coming: `pgrep -f AgentMesh/node_modules/electron`
+  matches only the **helper** processes (the main binary lives at `Contents/MacOS/Electron`), and
+  macOS pids wrap past 99999 back to low three-digit numbers, so a "new" instance can have a
+  *smaller* pid than the one you started. Confirm with
+  `ps -o pid=,ppid=,lstart=,command=` before killing anything, and check that the pid you're
+  about to kill is not an ancestor of `$$`.
 - Protocol work is tested against real throwaway sessions, spawned through `node-pty` the same way
   `spawnTab` does (including the env scrubbing). Two gotchas: a fresh cwd triggers the **trust
   prompt**, so write `\r` a few seconds after spawn; and registration is asynchronous, so poll
@@ -129,8 +246,47 @@ The same socket that carries `control`/`rename` is a general inbox — this is t
 - `history.jsonl`, `projects/`, `sessions/` — the three the sidebar actually reads.
 
 ## Sidebar behavior
+- The plan-usage footer sits below the list, outside the scroller — it answers about the account,
+  not any row. Its own section above covers it; it is not part of `render()`.
 - Each tab owns a real pty running its own `claude` — tabs are not one TUI switched with `/resume`. That's what makes them independently interruptible and closable.
-- Click a row → if it's already bound to an open tab, focus that tab; if the session is **dead**, open a new tab running `claude --resume <sessionId>` in its own cwd. Live sessions this window doesn't host are never resumed — see below.
+- Click a row → if it's already bound to an open tab, focus that tab; if the session is **dead**, open a new tab running `claude --resume <sessionId>` in its own cwd. Live sessions this window doesn't host are never resumed — they fork, see below.
+- Groups are `WAITING` / `RUNNING` / `IDLE` / `RECENT`, one per registry status, ordered by what they want from you. The old single `LIVE` bucket answered three questions at once. `WAITING` carries the amber status color on its header; unknown registry statuses fall into `RUNNING` (`statusOf` treats anything that isn't `idle`/`waiting` as working). Hosted tabs with no session row sit at the top of `RUNNING`.
+- **Every hosted tab gets a card**, including ones no session row accounts for: a `claude agents` FleetView (hosts no sessionId of its own) and sessions too young to have registered. Before that, `.row-close` was gated on `.row.open`, which is `tabId && tabs.has(tabId)` — and `tabId` comes from walking the pid parent chain (`tabForPid`, main.js), which a daemon-owned bg agent never satisfies. Result: tabs that existed with no card and no way to close them.
+- Card subtitle is `background · project · branch · <relative time>`. Not prompt count (bookkeeping), not pid or byte size (those live in the hover tooltip). `project` is dropped while the list is scoped to one folder, where every row would repeat the same word — keyed on `scopedDir`, not `projectOnly`, because the toggle can be armed with no folder to scope to.
+- **`windowDir` is where the window is pointed** — one piece of renderer state answering that
+  question, persisted in `localStorage`. It names what `#new-agent` starts and what the list is
+  scoped to. Each window answers "what's running on what I'm looking at" first and acts as a
+  machine-wide mesh view second, so `projectOnly` also starts **on** and persists.
+  - It **follows the active tab**: `setActive` calls `setWindowDir(tab.cwd)`, because switching to
+    a session in another repo *is* moving the window there — and without it the tab you just
+    opened could be filtered out of the list showing it.
+  - It also stands alone with no tabs, which is the whole point: `#dir` re-points the window
+    without spawning anything.
+  - `sessions.js` also computes `isCurrentProject`, but that compares against `process.cwd()` —
+    where the *app* was launched, which for a Finder launch is `/`. The renderer does not use it.
+  - Third state: toggle armed with **no folder chosen**. Filtering on nothing would empty the list
+    next to the welcome pane, which is a dead end, so it shows everything and `#filter` dims
+    (`.empty`) instead of lighting up.
+  - `#filter` is a glyph, not a word: the folder it scopes to is named by `#dir` immediately to its
+    left, so the toggle never has to repeat it.
+
+## Forks are not duplicates
+
+`--fork-session` copies the transcript wholesale, custom title included, so a fork and its origin
+render as the same card twice. Parentage comes from two sources, ledger first:
+
+- **`forkOrigins` in `localStorage`** (renderer.js) — when *we* fork, we hold the parent id against
+  the new tab (`pendingForks`) and bind it in `syncTabs` once that tab's session registers. Depends
+  on nothing internal to the CLI.
+- **`forkParent()`** (sessions.js) — first line of the transcript carries a `sessionId` that
+  disagrees with the filename → that's the parent. Cheap (8 KB head read, cached forever, the first
+  line never changes) but **unconfirmed against a real fork**: across 65 transcripts on this machine
+  no file carries a foreign session id, which only proves it doesn't false-positive. If forks turn
+  out to be rewritten to the new id on copy, this path is a permanent no-op and the ledger is
+  carrying the feature alone.
+
+Forks render indented under their origin with a `fork` chip. A fork whose origin is in a different
+group (parent idle, fork busy) stands on its own rather than dragging the parent across groups.
 
 ## Resume is not attach
 
@@ -140,8 +296,10 @@ branch on `kind` from the pid registry (`'interactive'` | `'bg'`):
 - **`kind: 'interactive'`, running elsewhere** — the CLI allows it, and that's the trap. Each
   resume is a second live writer on one transcript. Left unguarded this compounds: one click per
   window per repaint produced 11 concurrent `claude --resume <same-id>` processes on this machine.
-  AgentMesh now refuses and says so on the row; **⌥click** forks instead (`--fork-session`, new
-  session id, name deliberately not carried over).
+  AgentMesh never resumes one. The row carries an **`in use` chip and a fork button**, and a plain
+  click forks (`--fork-session`, new session id, name deliberately not carried over). This used to
+  be a hidden **⌥click** plus a transient row message explaining why the plain click did nothing —
+  a modifier key is not an affordance, and an error after the fact is not a design.
 - **`kind: 'bg'`** — the CLI refuses outright: `Error: Session <id> is currently running as a
   background agent (bg). Use \`claude agents\` to find and attach to it, or add --fork-session to
   branch off a copy.` The guard is `if (!t.forkSession) { … await $Fe(sessionId) … }` on every
@@ -201,7 +359,9 @@ If AgentMesh is itself launched from inside a `claude` session, that session's e
 - `main.js` keeps `ptys: Map<tabId, ptyProcess>`; `tabId` is a `crypto.randomUUID()` minted at spawn. Every pty IPC message (`pty-input`/`pty-resize`/`pty-close`/`pty-data`/`pty-exit`) carries it.
 - Switching tabs never touches a pty. Each tab's xterm host is `position: absolute; inset: 0` and toggles `visibility: hidden` — every shell keeps running with its own scrollback.
 - **There is no tab strip**, and nothing replaced it. The sidebar is the switcher — it already lists every session on the machine and marks the ones we host, so a second row of the same sessions across the top showed the user the same thing twice. The terminal runs to the top of the window: the traffic lights sit over the sidebar (which is what `#sidebar-header`'s 84px left pad is for), and the sidebar is drag region enough to move the window by, so the terminal pane needs to reserve nothing.
-- Two ways to start a session, because they answer different questions. `#new-agent` in the sidebar inherits the **active session's folder** — a second agent on what you're already working on, no dialog. The header `+` always opens the folder picker, for starting somewhere else.
+- **The sidebar header is a folder switcher, and nothing else.** `#dir` names the window's folder and opens the picker; `#filter` toggles the scope. Starting a session is `#new-agent`, one button, below, in the folder the header names.
+  - It used to be a session count plus a `+`. The count was a number nobody acts on. The `+` was worse: it read as "new session" and behaved as "change folder", which is the most misleading pairing available — the affordance and the effect pointed at different things.
+  - The button no longer repeats the folder name either (`.where` is gone). The header owns that string; printing it again 20px lower is the same fact twice.
 - **Zero tabs is a legitimate state.** Launch shows `#welcome` (folder picker + recent folders pulled straight out of the session rows, so there's no second history to keep in sync) and spawns nothing. A session's cwd is fixed at spawn and decides which project it belongs to, so the folder is asked for up front rather than inherited from wherever the app was launched.
 
 ## The pty *is* Claude Code

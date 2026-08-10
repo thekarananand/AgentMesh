@@ -8,9 +8,11 @@ const { HEADER_HEIGHT } = require('./titlebar');
 const sessions = require('./sessions');
 const { rename } = require('./rename');
 const { autoName } = require('./autoname');
+const usage = require('./usage');
 
 let win;
 let unwatch;
+let unpollUsage;
 
 const ptys = new Map(); // tabId -> node-pty process
 const cwd = process.cwd();
@@ -84,6 +86,15 @@ function pushSessions() {
   });
 }
 
+// Plan usage is one account-wide fact, so it rides its own channel rather than being
+// stapled onto every session row.
+function pushUsage(value) {
+  if (!win || win.isDestroyed()) return;
+  try {
+    win.webContents.send('usage-update', value);
+  } catch {}
+}
+
 function shellQuote(s) {
   return `'${String(s).replace(/'/g, `'\\''`)}'`;
 }
@@ -137,6 +148,9 @@ function spawnTab({ resumeSessionId, resumeName, launchCwd, forkSession, agentsV
   });
 
   ptys.set(tabId, proc);
+  // One more agent is the moment the burn rate changes, so don't sit on a stale bar
+  // until the next poll.
+  usage.refresh().then(pushUsage);
   return tabId;
 }
 
@@ -176,6 +190,13 @@ function createWindow() {
 
   ipcMain.handle('sessions:list', () => listAnnotated());
 
+  ipcMain.handle('usage:get', () => usage.snapshot());
+  ipcMain.handle('usage:refresh', async () => {
+    const value = await usage.refresh({ force: true });
+    pushUsage(value);
+    return value;
+  });
+
   ipcMain.handle('dialog:pick-directory', async () => {
     const res = await dialog.showOpenDialog(win, {
       title: 'Start a session in…',
@@ -202,9 +223,15 @@ function createWindow() {
 
   win.webContents.on('did-finish-load', pushSessions);
   unwatch = sessions.watch(pushSessions);
+  unpollUsage = usage.poll(pushUsage);
+
+  // Coming back to the window is when a stale number is most likely to mislead. The
+  // refresh floor inside usage.js is what keeps alt-tabbing from turning into traffic.
+  win.on('focus', () => usage.refresh().then(pushUsage));
 
   win.on('closed', () => {
     if (unwatch) unwatch();
+    if (unpollUsage) unpollUsage();
     for (const proc of ptys.values()) proc.kill();
     ptys.clear();
     win = null;

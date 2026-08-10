@@ -17,4 +17,9 @@ contextBridge.exposeInMainWorld('meshAPI', {
   reveal: (sessionId) => ipcRenderer.send('sessions:reveal', sessionId),
   rename: (sessionId, name) => ipcRenderer.invoke('sessions:rename', { sessionId, name }),
   pickDirectory: () => ipcRenderer.invoke('dialog:pick-directory'),
+
+  // Normalized percentages only — the OAuth token never leaves the main process.
+  usage: () => ipcRenderer.invoke('usage:get'),
+  refreshUsage: () => ipcRenderer.invoke('usage:refresh'),
+  onUsageUpdate: (callback) => ipcRenderer.on('usage-update', (event, value) => callback(value)),
 });
