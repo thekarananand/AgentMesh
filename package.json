@@ -1,21 +1,103 @@
 {
   "name": "agentmesh",
+  "productName": "AgentMesh",
   "version": "1.0.0",
-  "description": "",
+  "description": "A control plane for running many Claude Code agents at once — terminals, plus a live view of every session on the machine.",
   "main": "main.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "electron ."
+    "start": "electron .",
+    "postinstall": "electron-builder install-app-deps",
+    "fonts": "node tools/build-fonts.js",
+    "icon": "node tools/make-icon.js",
+    "dist": "electron-builder",
+    "dist:mac": "electron-builder --mac",
+    "dist:linux": "electron-builder --linux",
+    "dist:win": "electron-builder --win",
+    "pack": "electron-builder --dir"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": [
+    "claude-code",
+    "terminal",
+    "electron",
+    "agents"
+  ],
+  "author": "Karan Anand",
   "license": "ISC",
   "type": "commonjs",
+  "engines": {
+    "node": ">=20"
+  },
   "devDependencies": {
-    "electron": "^43.3.0"
+    "electron": "^43.3.0",
+    "electron-builder": "^25.1.8",
+    "wawoff2": "^2.0.1"
   },
   "dependencies": {
     "node-pty": "^1.1.0",
     "xterm": "^5.3.0"
+  },
+  "build": {
+    "appId": "dev.agentmesh.app",
+    "productName": "AgentMesh",
+    "directories": {
+      "buildResources": "build"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer.js",
+      "sessions.js",
+      "rename.js",
+      "autoname.js",
+      "usage.js",
+      "config.js",
+      "claude.js",
+      "platform.js",
+      "titlebar.js",
+      "index.html",
+      "assets/**/*",
+      "node_modules/xterm/lib/xterm.js",
+      "node_modules/xterm/css/xterm.css",
+      "node_modules/node-pty/**/*"
+    ],
+    "asarUnpack": [
+      "node_modules/node-pty/**/*"
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ],
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist"
+    },
+    "linux": {
+      "category": "Development",
+      "target": [
+        "AppImage",
+        "deb"
+      ]
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    }
   }
 }

@@ -20,6 +20,39 @@ Three goals at once, in this priority order. A change that serves one but breaks
    project or CLI version exists. Everything read out of the CLI is version-fragile by nature, so
    degrade to a working app with less information rather than throwing.
 
+**Portability is a standing requirement, not a milestone that was reached once.** Every change
+must keep the app installable and runnable on a machine that is not this one: a different user,
+a different home directory, a different OS, a fresh `~/.claude`. Concretely, and enforced on
+every new piece of work:
+
+- **No dependency the app doesn't carry or check for.** If something must exist on the machine,
+  it is either bundled in the repo (fonts, icon), resolved at runtime with a real failure
+  message (the `claude` binary — see `claude.js`), or written down in the table below. A
+  hand-installed Homebrew cask that nothing verifies is exactly the bug this rule exists to
+  prevent: it worked here and silently produced a wrong app everywhere else.
+- **Document every dependency you add**, in `README.md` (what a user must install) and in the
+  table below (what the app assumes at runtime, and what happens when it's missing). "It's
+  obvious" and "it's already on my machine" are how the last set of these got missed.
+- **Every OS branch goes in `platform.js`**, never inline. A `process.platform` check in
+  `main.js` or `renderer.js` is a bug in the making — the second one always gets forgotten.
+- **User-specific behavior belongs in `config.js`**, not a constant. Anything that writes to
+  someone else's `~/.claude`, or talks to the network, needs an off switch.
+
+### Runtime dependencies — the complete list
+
+| Dependency | How it's satisfied | If missing |
+|---|---|---|
+| Claude Code CLI (`claude`) | Resolved at startup via login shell, or `claudeBin` in settings | New-session controls disable, welcome pane and sidebar say why |
+| Fonts (JetBrains Mono Nerd Font, Inter) | **Bundled** in `assets/fonts` as woff2, `@font-face` in `index.html` | n/a — cannot be missing |
+| App icon | **Bundled** as committed `build/icon.png` | n/a |
+| `node-pty` native binary | `npm install` postinstall runs `electron-builder install-app-deps` | Build fails loudly |
+| Process list (`ps` / PowerShell CIM) | `platform.parentMap()` | Rows stop binding to tabs; a warning names it |
+| Per-session control socket | Path comes from the CLI's own pid registry | Rename falls back to transcript records |
+| macOS Keychain / `.credentials.json` | `usage.js`, platform-branched | Usage footer hides |
+
+Authoring-only tools (`npm run fonts`, `npm run icon`) may depend on whatever is convenient —
+their outputs are committed, so no one else ever runs them.
+
 Much of the work is filling gaps the CLI leaves — always-named sessions, real attach for bg
 agents, hiding phantom prewarm spares, cross-project visibility. That's the *source* of features,
 not the goal itself; a CLI gap is worth closing when it serves one of the three above.
@@ -44,15 +77,21 @@ not the goal itself; a CLI gap is worth closing when it serves one of the three 
   that came from the binary was confirmed this way.
 
 ## Files
-- `main.js` — BrowserWindow config, per-tab node-pty spawn (`spawnTab`), pty env scrubbing, pid→tab binding (`parentMap`/`tabForPid`/`listAnnotated`), IPC wiring, session push to renderer
-- `preload.js` — contextBridge, exposes `window.ptyAPI` (per-tab terminal IO, keyed by `tabId`) and `window.meshAPI` (sessions + plan usage)
+- `main.js` — BrowserWindow config, per-tab node-pty spawn (`spawnTab`), pty env scrubbing, pid→tab binding (`tabForPid`/`listAnnotated`, over the map `platform.parentMap()` returns), IPC wiring, session push to renderer
+- `preload.js` — contextBridge, exposes `window.ptyAPI` (per-tab terminal IO, keyed by `tabId`), `window.meshAPI` (sessions, plan usage, CLI info, warnings) and `window.platformAPI` (the two facts the page can't work out for itself: vibrancy, title-bar inset)
 - `renderer.js` — tab manager, xterm.js setup + theme, cell measurement, fit logic, sidebar render, sidebar resizer
 - `sessions.js` — reads `~/.claude/sessions/*.json` + `history.jsonl` + tails `~/.claude/projects/*/*.jsonl` for title/branch/cwd; pure Node, no Electron deps, unit-testable standalone
 - `rename.js` — renames a session in sync with the CLI: control socket for live ones, transcript records for dead ones; pure Node
 - `autoname.js` — promotes a session's AI title into its actual name so no session stays on its cwd-derived autoname
 - `usage.js` — the account's plan windows (5h / weekly): credential read, `/api/oauth/usage` fetch, normalizing, poll + backoff; pure Node, the OAuth token never leaves it
-- `index.html` — shell page, sidebar + terminal split layout, welcome/folder-picker pane
+- `platform.js` — **every OS branch in the app**: window chrome, pid→ppid map, shell selection + argument quoting, socket usability. Pure Node; nothing else may test `process.platform`
+- `config.js` — user settings (`settings.json` in the per-user data dir): `claudeBin`, `autoname`, `usage`. Pure Node, type-checked on read, atomic write
+- `claude.js` — locates the CLI (config override → login-shell `command -v`), probes its version, and is what `spawnTab` puts at the front of the pty command
+- `index.html` — shell page, `@font-face` for the bundled fonts, sidebar + terminal split layout, welcome/folder-picker pane
 - `titlebar.js` — shared `HEADER_HEIGHT` constant (main + preload both require it)
+- `assets/fonts/` — the bundled woff2 faces and their OFL license texts. Shipped, not installed
+- `build/` — packaging inputs: `icon.svg` (source art), `icon.png` (committed, what electron-builder consumes), `entitlements.mac.plist`
+- `tools/` — authoring scripts, never part of a build: `build-fonts.js` (ttf→woff2), `make-icon.js` (svg→png)
 
 ## Session sidebar — data sources
 - `claude agents --json` / `~/.claude/sessions/<pid>.json` — **live** sessions only, most stable API. Has `sessionId`, `pid`, `status` (busy/idle), `cwd`, socket path. `sessions.js` reads the JSON files directly (skip shelling out) and validates the pid is still alive with `process.kill(pid, 0)` — the registry file can outlive the process on a crash.
@@ -103,8 +142,11 @@ So AgentMesh promotes it: `pushSessions()` runs `autoName()`, which pushes a ses
 (or, before that exists, its first prompt) into the name over the control socket, kebab-cased to
 match Claude Code's own generated-name style. Anything already deliberately named is never
 touched, and each session is attempted once per app run so a failing rename can't retry-storm.
-`SCOPE` is `'tabs'` (only sessions in our own tabs); `'all'` covers every live session on the
-machine, including ones started in another terminal.
+Scope is a **user setting** (`config.js`), not a constant, because this writes into state the
+app doesn't own: `autoname.scope` is `'tabs'` by default (only sessions in our own tabs);
+`'all'` covers every live session on the machine, including ones started in another terminal,
+which is not a decision to make on a stranger's behalf. `autoname.enabled: false` turns it off
+entirely.
 
 ## Reading the CLI's internals
 
@@ -112,7 +154,7 @@ Everything undocumented in here was read out of the shipped binary, not guessed.
 because it will be needed again on the next version bump:
 
 ```bash
-readlink -f "$(which claude)"        # /opt/homebrew/Caskroom/claude-code@latest/<ver>/claude
+readlink -f "$(which claude)"        # e.g. $(brew --prefix)/Caskroom/claude-code@latest/<ver>/claude
 strings -n 6 <that path> > cc-strings.txt   # ~280MB Mach-O, bun-compiled; ~2 min, 420k lines
 ```
 
@@ -237,6 +279,20 @@ were dropped because they cost a full repaint of every row; this costs one assig
   `~/.claude/sessions/` for the new pid file rather than sleeping a fixed amount.
 - Clean up after: throwaway sessions leave transcripts under `~/.claude/projects/<slug>/` that
   otherwise show up in the sidebar's `RECENT` group.
+- **Renderer errors don't reach `npm start`'s stdout.** Launch with `ELECTRON_ENABLE_LOGGING=1`
+  and the page's `console` lands in the log — otherwise a renderer that throws before first
+  paint looks exactly like a window that opened fine.
+- **Testing a *packaged* build**: run the binary directly with the cwd set to `/`
+  (`cd / && dist/mac-arm64/AgentMesh.app/Contents/MacOS/AgentMesh`) — that reproduces the
+  Finder/Dock launch, which is the only way the `process.cwd()` class of bug shows up. To
+  exercise the packaged native module without clicking anything, `ELECTRON_RUN_AS_NODE=1` on
+  that same binary with a script that requires node-pty **through the asar path** and spawns
+  something (see the packaging section for why the unpacked path fails).
+- **Platform branches are testable on one machine**: `platform.js` takes its answer from
+  `os.platform()`, so a test can stub it and assert both the Unix and Windows shapes of
+  `parentMap`, `quoteArg`, `shellCommand`, `windowOptions` and `canUseSocket` without a second
+  OS. Do that before claiming a branch works — a branch that has never been evaluated is not a
+  branch that has been written.
 
 ## Other `~/.claude` state (not used yet)
 
@@ -248,6 +304,18 @@ were dropped because they cost a full repaint of every row; this costs one assig
 ## Sidebar behavior
 - The plan-usage footer sits below the list, outside the scroller — it answers about the account,
   not any row. Its own section above covers it; it is not part of `render()`.
+- **`#warnings` sits directly above it**, same `:empty`-is-hidden contract, amber, and also
+  outside `render()`. It exists for degradations that would otherwise be invisible: no
+  `claude` on PATH, or a process list the app can't read (which silently stops rows binding to
+  tabs, and with them autonaming). Messages are deduplicated by `kind` and additive — a poll
+  that keeps failing must not stack the same sentence, and a second problem must not overwrite
+  the first. A feature that quietly stopped is worse than one that says why.
+- **No CLI means no session to start**: `#new-agent` and the welcome pane's picker disable
+  themselves and say so, rather than spawning a pty that exits 127 and a tab that vanishes.
+  `claudeInfo === null` (not yet resolved) is a third state and disables nothing.
+- The empty list distinguishes three emptinesses: scoped-and-empty (names the folder),
+  unscoped-with-rows-behind-it, and **nothing at all** — which on a fresh machine is a first
+  launch, not a failure, and says so.
 - Each tab owns a real pty running its own `claude` — tabs are not one TUI switched with `/resume`. That's what makes them independently interruptible and closable.
 - Click a row → if it's already bound to an open tab, focus that tab; if the session is **dead**, open a new tab running `claude --resume <sessionId>` in its own cwd. Live sessions this window doesn't host are never resumed — they fork, see below.
 - Groups are `WAITING` / `RUNNING` / `IDLE` / `RECENT`, one per registry status, ordered by what they want from you. The old single `LIVE` bucket answered three questions at once. `WAITING` carries the amber status color on its header; unknown registry statuses fall into `RUNNING` (`statusOf` treats anything that isn't `idle`/`waiting` as working). Hosted tabs with no session row sit at the top of `RUNNING`.
@@ -262,8 +330,14 @@ were dropped because they cost a full repaint of every row; this costs one assig
     opened could be filtered out of the list showing it.
   - It also stands alone with no tabs, which is the whole point: `#dir` re-points the window
     without spawning anything.
-  - `sessions.js` also computes `isCurrentProject`, but that compares against `process.cwd()` —
-    where the *app* was launched, which for a Finder launch is `/`. The renderer does not use it.
+  - It is **validated on load**, not trusted: the stored value is a raw absolute path from some
+    previous launch, and repos get renamed and disks get unmounted. A folder that no longer
+    exists would scope the list to nothing beside a header naming a directory that isn't there,
+    so `meshAPI.dirExists` checks it once and clears it.
+  - `sessions.js` used to compute an `isCurrentProject` flag against `process.cwd()`. That is
+    where the *app* was launched — `/` for a Finder or Dock launch, which is every packaged
+    launch — so it was meaningless and is gone. `process.cwd()` is not a default for anything
+    any more; `spawnTab` falls back to `os.homedir()`.
   - Third state: toggle armed with **no folder chosen**. Filtering on nothing would empty the list
     next to the welcome pane, which is a dead end, so it shows everything and `#filter` dims
     (`.empty`) instead of lighting up.
@@ -365,7 +439,11 @@ If AgentMesh is itself launched from inside a `claude` session, that session's e
 - **Zero tabs is a legitimate state.** Launch shows `#welcome` (folder picker + recent folders pulled straight out of the session rows, so there's no second history to keep in sync) and spawns nothing. A session's cwd is fixed at spawn and decides which project it belongs to, so the folder is asked for up front rather than inherited from wherever the app was launched.
 
 ## The pty *is* Claude Code
-`spawnTab` runs `$SHELL -l -c 'exec claude …'`, not a shell it then types `claude` into. Two consequences, both wanted:
+`spawnTab` runs `$SHELL -l -c 'exec <claude> …'`, not a shell it then types `claude` into.
+`<claude>` is the absolute path `claude.js` resolved at startup, not the bare word — the login
+shell would usually find the same binary, but resolving once means every tab runs the CLI that
+was actually probed rather than whatever a later PATH edit shadows it with. Bare `claude`
+remains the fallback when resolution failed. Two consequences, both wanted:
 - Quitting Claude Code ends the pty, so `pty-exit` closes the terminal instead of leaving the user at a bare prompt in a tab that no longer stands for anything. Last one closed → back to `#welcome`.
 - The `claude` process is the pty process, so its parent is Electron directly. The `tabForPid` ancestry walk resolves in one hop now instead of three.
 
@@ -373,27 +451,93 @@ The login shell is still worth paying for — it's what puts `claude` and the us
 - Tab spawn/exit/close all call `pushSessions()` so pid→tab binding re-resolves without waiting on the 4s poll.
 - `fitAll()` resizes **every** tab, not just the active one — a hidden tab still has a live pty whose `cols`/`rows` must track the window, or its output wraps wrong the moment you switch to it.
 
+## Settings (`config.js`)
+
+`settings.json` in `app.getPath('userData')`, absent by default, every key optional and
+type-checked on read (a hand-edited `"scope": true` degrades to the default rather than
+reaching a rename call). Written atomically via temp-file + rename, because a half-written
+file read on the next launch would silently reset every setting.
+
+Three keys, and the test for what belongs here: **does it write into state this app doesn't
+own, or talk to the network?** `claudeBin` (PATH escape hatch), `autoname` (renames sessions
+in `~/.claude`), `usage` (the one network call). Sidebar width, window folder, scope toggle
+and the fork ledger stay in `localStorage` — that is UI state, it already persists per user,
+and putting it in a JSON file invites hand-editing a layout constant.
+
 ## Keys
 - `Shift+Enter` and `Ctrl+Enter` insert a newline instead of submitting: the renderer intercepts both in `attachCustomKeyEventHandler` and writes `\x1b\r` (ESC+CR) to the pty. xterm sends a bare CR for these by default, which is "send"; ESC+CR reads as alt/option-Enter, which Claude Code's input treats as a line break natively — no `/terminal-setup` or terminal-side keybinding needed.
 - **`e.preventDefault()` in that handler is load-bearing.** xterm's `_keyDown` clears `_keyDownHandled` *before* consulting the custom handler and returns early without suppressing the browser default, so `_keyPress` still fires and emits charCode 13 — a bare CR landing right after our ESC+CR. Claude Code then sees newline-then-submit and the prompt sends anyway. Killing the default keydown stops Chromium dispatching that keypress at all. The handler also returns `false` for `e.type === 'keypress'` as a guard for engines that dispatch it regardless.
 
-## External dependencies (Homebrew)
+## Packaging (`electron-builder`)
 
-Not in `package.json` — these are machine-level installs the app assumes exist. Fresh machine setup:
+`npm run dist` builds an installer; `npm run pack` builds unpacked into `dist/` for testing
+the packaging itself. Config lives in `package.json` under `build`. Four things in it are
+load-bearing and were each found by a failure:
 
-```bash
-brew install --cask font-jetbrains-mono-nerd-font   # terminal font
-brew install --cask font-inter                      # all non-terminal UI chrome
-```
+- **`asarUnpack: node_modules/node-pty/**`.** node-pty ships `spawn-helper`, a real executable
+  it `posix_spawn`s. It cannot run from inside an asar, and without this every tab fails to
+  spawn with `posix_spawnp failed`.
+- **node-pty must be `require`d through the asar path, not the unpacked one.** Its own code
+  does `helperPath.replace('app.asar', 'app.asar.unpacked')`. Point a require at the unpacked
+  copy directly and that rewrite fires on a path that is *already* unpacked, producing
+  `app.asar.unpacked.unpacked` and the same `posix_spawnp failed`. This bit during testing,
+  not in the app — worth knowing before diagnosing it as a packaging bug.
+- **`files` is an explicit allowlist**, so `assets/**/*` and the two xterm files
+  (`index.html` loads `node_modules/xterm/{lib/xterm.js,css/xterm.css}` by relative path) have
+  to be named. Anything new the page loads at runtime must be added there or it silently
+  won't ship.
+- **`postinstall: electron-builder install-app-deps`** rebuilds node-pty against Electron's
+  ABI. npm 11+ gates lifecycle scripts, so a fresh clone may need `npm approve-scripts` once.
 
-`claude` (the Claude Code CLI) must also be on `PATH` — the app spawns it per tab and reads its local state under `~/.claude`. Everything else (`electron`, `node-pty`, `xterm`) comes from `npm install`.
+macOS builds are unsigned without credentials; `build/entitlements.mac.plist` covers the
+hardened runtime (JIT, library validation off for the native module, `inherit` for the pty's
+children) and only matters once `CSC_*` exists. Linux has no node-pty prebuild — a build host
+needs `python3` + a compiler.
 
-Both fonts degrade rather than break: xterm falls back to generic `monospace`, the UI chain falls back to `-apple-system`. Layout still works, it just looks wrong.
-
-## Fonts
+## Fonts — bundled, not installed
 - **Terminal**: `JetBrainsMono Nerd Font Mono`. Pick the `Mono` variant, not `Propo` — fixed-width glyphs align in monospace cells. Settings: fontSize 13, lineHeight 1 (flush, needed for clean ASCII art), letterSpacing 0.
-- **Everything else** (sidebar, welcome pane): `Inter`, with `-apple-system` fallback. Set on `body`; xterm overrides itself via its own `fontFamily` option, so the split needs no extra selectors.
+- **Everything else** (sidebar, welcome pane): `Inter`. Variable, so two files cover every weight.
+- Both ship as woff2 in `assets/fonts` with `@font-face` in `index.html`. They used to be
+  Homebrew casks the user installed by hand, which made a clone on any other machine silently
+  wrong — not just uglier, but **mis-measured**, since the cell width feeds every terminal's
+  geometry. Regenerate with `npm run fonts` (needs the TrueType originals installed; the
+  woff2s are committed, so nobody else runs it). Both are SIL OFL 1.1 — license texts ship
+  beside them and stay there.
+- **A page-declared `@font-face` shadows a system font of the same name**, which is what makes
+  the bundling real rather than a fallback nobody reaches.
 - One-cell margin on all four sides of the terminal comes from `--cell-w` / `--cell-h`, measured in `renderer.js` before the first `term.open()` — xterm sizes against the container box at open time, so neither can be read off a live terminal. Width uses **canvas `measureText`, not DOM layout**; height uses a hidden `font: <size>px/1 <family>` span probe. `fitAll()` subtracts `2 * CELL_W` from the available width and `2 * CELL_H` from the height.
+- **The first measurement runs before the webfont is loaded, and lands on the fallback.**
+  Measured: 7.8266px (Menlo) versus 7.8px (JetBrains Mono at 13px, 0.6em advance) — on a
+  machine where the font was *also* installed system-wide, because `font-display: block`
+  hadn't resolved yet. So `renderer.js` re-measures behind `document.fonts.load(...)` +
+  `ready` and refits, and `openTab` waits on that same promise before `term.open()` — xterm
+  bakes the container's metrics in at open time and a later resize will not undo it.
+
+## Platforms — what runs where, and what degrades
+
+Every branch is in `platform.js`. Nothing else in the app tests `process.platform`.
+
+| | macOS | Linux | Windows |
+|---|---|---|---|
+| Terminals, sidebar, sessions | verified | supported | **written for, never run** |
+| Window chrome | `hiddenInset` + traffic lights over the sidebar | frameless, opaque | frameless + `titleBarOverlay`, opaque |
+| Vibrancy | yes | no — `body.no-vibrancy` paints `#0f1116` | same |
+| pid→tab binding | `ps -Ao pid=,ppid=` | same | PowerShell `Get-CimInstance Win32_Process`, CSV-parsed |
+| pty shell | `$SHELL -l -c 'exec …'` | same | `powershell.exe -NoLogo -Command …` (no `exec`; the host process stays) |
+| Argument quoting | POSIX `'…'\''…'` | same | PowerShell `'…''…'` |
+| Rename over the socket | unix socket | unix socket | named pipe if the CLI writes one — **unverified** |
+| Credentials | Keychain via `security` | `~/.claude/.credentials.json` | `~/.claude/.credentials.json` |
+
+Two things that are true because of how this was built, and stay true:
+
+- **`transparent: true` off macOS is a see-through window, not a subtler one.** The 27%-alpha
+  body only works because NSVisualEffectView paints behind it. Anywhere else the page has to
+  paint its own background, which is what `body.no-vibrancy` is for.
+- **Windows is honest best-effort.** Nothing about the Windows CLI's on-disk state has been
+  checked against a real machine — in particular whether `messagingSocketPath` exists there at
+  all. `canUseSocket()` is written so a named pipe would work and a missing one falls through
+  to the transcript path rather than throwing. First person to run it should record what the
+  pid registry actually contains.
 
 ## Chrome vs glass
 - Sidebar is **deliberately opaque** (`--chrome-bg: #1b1e24`), which kills vibrancy behind it. Only the terminal pane keeps the blur.
@@ -403,7 +547,10 @@ Both fonts degrade rather than break: xterm falls back to generic `monospace`, t
 - Width clamps to 180–520px, persists in `localStorage` under `sidebarWidth`, double-click resets to 248.
 
 ## Theme — One Dark Pro Glass
-Colors pulled from `/Users/thekarananand/Library/Application Support/Zed/extensions/installed/one-dark-pro-max/themes/one-dark-pro-glass.json`. Full ANSI 16-color palette lives in `renderer.js` theme object.
+Colors were copied from the **One Dark Pro Max** Zed extension's `one-dark-pro-glass` theme
+JSON (its `terminal.background` of `#08090900` is where the zero-alpha trick below comes
+from). Copied, not read: the full ANSI 16-color palette lives in the `renderer.js` theme
+object and nothing loads that file at runtime — it isn't on anyone else's machine.
 
 ## Real OS blur (vibrancy) — gotchas found the hard way
 

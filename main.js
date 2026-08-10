@@ -1,10 +1,12 @@
 const { app, BrowserWindow, ipcMain, dialog, shell: electronShell } = require('electron');
 const path = require('path');
+const fs = require('fs');
 const os = require('os');
 const crypto = require('crypto');
-const { execFileSync } = require('child_process');
 const pty = require('node-pty');
-const { HEADER_HEIGHT } = require('./titlebar');
+const platform = require('./platform');
+const config = require('./config');
+const claudeCli = require('./claude');
 const sessions = require('./sessions');
 const { rename } = require('./rename');
 const { autoName } = require('./autoname');
@@ -15,8 +17,6 @@ let unwatch;
 let unpollUsage;
 
 const ptys = new Map(); // tabId -> node-pty process
-const cwd = process.cwd();
-const shellBin = os.platform() === 'win32' ? 'powershell.exe' : (process.env.SHELL || '/bin/bash');
 
 // Strip Claude Code's own session env — if AgentMesh itself was launched from inside
 // a `claude` session, these leak in via process.env and make every inner `claude` think
@@ -26,19 +26,6 @@ delete ptyEnv.CLAUDE_CODE_CHILD_SESSION;
 delete ptyEnv.CLAUDE_CODE_SESSION_ID;
 delete ptyEnv.CLAUDE_CODE_MESSAGING_SOCKET;
 delete ptyEnv.CLAUDE_CODE_ENTRYPOINT;
-
-// pid -> ppid for every process on the machine, in one `ps` call.
-function parentMap() {
-  const map = new Map();
-  try {
-    const out = execFileSync('ps', ['-Ao', 'pid=,ppid='], { encoding: 'utf8' });
-    for (const line of out.split('\n')) {
-      const [pid, ppid] = line.trim().split(/\s+/).map(Number);
-      if (pid) map.set(pid, ppid);
-    }
-  } catch {}
-  return map;
-}
 
 // A live session's pid is the `claude` process, whose ancestor is the tab's shell.
 // Walking up the parent chain is what binds a registry entry to a tab we own.
@@ -53,13 +40,19 @@ function tabForPid(pid, parents, shellToTab) {
   return null;
 }
 
+// Set once the ancestry walk has failed, so the renderer can say *why* rows stopped binding
+// to tabs instead of the feature just quietly not happening. Sticky: one failure is enough
+// to distrust the binding, and the poll would otherwise flap the warning on and off.
+let pidWalkBroken = null;
+
 function listAnnotated() {
-  const rows = sessions.list(cwd);
+  const rows = sessions.list();
   if (!rows.some((r) => r.live && r.pid)) return rows;
 
   const shellToTab = new Map();
   for (const [tabId, proc] of ptys) shellToTab.set(proc.pid, tabId);
-  const parents = parentMap();
+  const { map: parents, ok, error } = platform.parentMap();
+  if (!ok && !pidWalkBroken) pidWalkBroken = error || 'process list unavailable';
 
   for (const row of rows) {
     row.tabId = row.live && row.pid ? tabForPid(row.pid, parents, shellToTab) : null;
@@ -68,6 +61,7 @@ function listAnnotated() {
 }
 
 let autoNaming = false;
+let pidWalkReported = false;
 
 function pushSessions() {
   if (!win || win.isDestroyed()) return;
@@ -75,6 +69,16 @@ function pushSessions() {
   try {
     win.webContents.send('sessions-update', rows);
   } catch {}
+
+  if (pidWalkBroken && !pidWalkReported) {
+    pidWalkReported = true;
+    try {
+      win.webContents.send('app-warning', {
+        kind: 'pid-walk',
+        message: `Can't read the process list, so sessions won't bind to their tabs (${pidWalkBroken})`,
+      });
+    } catch {}
+  }
 
   // Promote a describing title into a real session name for anything still running
   // under its cwd-derived autoname. Guarded against re-entry because a successful
@@ -95,22 +99,18 @@ function pushUsage(value) {
   } catch {}
 }
 
-function shellQuote(s) {
-  return `'${String(s).replace(/'/g, `'\\''`)}'`;
-}
-
 // Each tab is its own real shell process, not a shared TUI switched with /resume —
 // that's what makes tabs independently interruptible and closable.
 function spawnTab({ resumeSessionId, resumeName, launchCwd, forkSession, agentsView } = {}) {
   const tabId = crypto.randomUUID();
 
-  let cmd = 'claude';
+  let cmd = claudeCli.command();
   if (agentsView) {
     // A background agent is driven by the daemon over its own pty host, so there is no
     // resume that attaches to it — `claude agents` (FleetView) is the CLI's only attach
     // path, and --cwd scopes it to the folder the clicked row lives in.
     cmd += ' agents';
-    if (launchCwd) cmd += ` --cwd ${shellQuote(launchCwd)}`;
+    if (launchCwd) cmd += ` --cwd ${platform.quoteArg(launchCwd)}`;
   } else if (resumeSessionId) {
     cmd += ` --resume ${resumeSessionId}`;
     // A fork gets its own session id, so carrying the original's name over would put
@@ -120,20 +120,19 @@ function spawnTab({ resumeSessionId, resumeName, launchCwd, forkSession, agentsV
     // live registry name is minted fresh at startup and falls back to the cwd-derived
     // autoname. Passing --name keeps the prompt box and terminal title in agreement
     // with the row that was clicked.
-    else if (resumeName) cmd += ` --name ${shellQuote(resumeName)}`;
+    else if (resumeName) cmd += ` --name ${platform.quoteArg(resumeName)}`;
   }
 
-  // A login shell is still worth paying for — it's what puts `claude` and the rest of
-  // the user's toolchain on PATH — but `exec` hands the pty over to Claude Code, so
-  // quitting Claude ends the terminal instead of dropping the user at a bare prompt
-  // in a tab that no longer stands for anything.
-  const args = os.platform() === 'win32' ? ['-Command', cmd] : ['-l', '-c', `exec ${cmd}`];
+  const { bin, args } = platform.shellCommand(cmd);
 
-  const proc = pty.spawn(shellBin, args, {
+  const proc = pty.spawn(bin, args, {
     name: 'xterm-color',
     cols: 80,
     rows: 30,
-    cwd: launchCwd || cwd,
+    // Never process.cwd(): launched from Finder or a packaged Dock icon that is `/`, and a
+    // session's cwd is what decides which project it belongs to. The folder is asked for up
+    // front; home is only the floor when something spawned without one.
+    cwd: launchCwd || os.homedir(),
     env: ptyEnv,
   });
 
@@ -158,11 +157,9 @@ function createWindow() {
   win = new BrowserWindow({
     width: 1100,
     height: 700,
-    titleBarStyle: 'hiddenInset',
-    trafficLightPosition: { x: 16, y: HEADER_HEIGHT / 2 - 6 },
-    transparent: true,
-    vibrancy: 'under-window',
-    visualEffectState: 'active',
+    // Frameless-with-vibrancy on macOS, frameless-and-opaque everywhere else — see
+    // platform.js for why that is one decision rather than five options.
+    ...platform.windowOptions(),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -190,6 +187,20 @@ function createWindow() {
 
   ipcMain.handle('sessions:list', () => listAnnotated());
 
+  ipcMain.handle('claude:info', () => claudeCli.info());
+
+  // The window's folder is remembered across launches as a raw absolute path, and paths
+  // move: a repo gets renamed, an external disk isn't mounted, the app is opened on a
+  // machine restored from someone else's backup. A folder that no longer exists would scope
+  // the list to nothing and spawn sessions into a directory that isn't there.
+  ipcMain.handle('fs:dir-exists', (event, dir) => {
+    try {
+      return typeof dir === 'string' && fs.statSync(dir).isDirectory();
+    } catch {
+      return false;
+    }
+  });
+
   ipcMain.handle('usage:get', () => usage.snapshot());
   ipcMain.handle('usage:refresh', async () => {
     const value = await usage.refresh({ force: true });
@@ -207,12 +218,12 @@ function createWindow() {
   });
 
   ipcMain.on('sessions:reveal', (event, sessionId) => {
-    const row = sessions.list(cwd).find((s) => s.sessionId === sessionId);
+    const row = sessions.list().find((s) => s.sessionId === sessionId);
     if (row && row.cwd) electronShell.openPath(row.cwd);
   });
 
   ipcMain.handle('sessions:rename', async (event, { sessionId, name }) => {
-    const row = sessions.list(cwd).find((s) => s.sessionId === sessionId);
+    const row = sessions.list().find((s) => s.sessionId === sessionId);
     const result = await rename(row, name);
     // The live path lands in files the session watcher is already watching, but the
     // archived path only touches a transcript — push either way so the row updates
@@ -221,7 +232,26 @@ function createWindow() {
     return result;
   });
 
-  win.webContents.on('did-finish-load', pushSessions);
+  // Find the CLI before anyone can click New session. If it isn't there, say so in the one
+  // place the user is already looking — spawning a tab that dies at exit 127 is not an
+  // error message.
+  win.webContents.on('did-finish-load', () => {
+    pushSessions();
+    claudeCli.resolve({ override: config.get().claudeBin }).then((cli) => {
+      if (!win || win.isDestroyed()) return;
+      try {
+        win.webContents.send('claude-info', cli);
+      } catch {}
+      if (cli.found) return;
+      win.webContents.send('app-warning', {
+        kind: 'claude-missing',
+        message:
+          cli.source === 'config-broken'
+            ? `Configured Claude Code path didn't answer: ${cli.path}`
+            : "Claude Code CLI not found on this machine's PATH — sessions can't be started.",
+      });
+    });
+  });
   unwatch = sessions.watch(pushSessions);
   unpollUsage = usage.poll(pushUsage);
 
@@ -239,9 +269,18 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  // Before the window, because autoname and the usage poller both read settings the moment
+  // the first session push happens.
+  config.init(app.getPath('userData'));
   createWindow();
 });
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
+  if (!platform.isMac) app.quit();
+});
+
+// The counterpart macOS needs: closing the window there keeps the app alive, so without
+// this there is no way to get a window back short of quitting and relaunching.
+app.on('activate', () => {
+  if (!win || win.isDestroyed()) createWindow();
 });

@@ -46,10 +46,55 @@ function measureCellHeight() {
   return Math.round(h) || FONT_SIZE;
 }
 
-const CELL_W = measureCellWidth();
-const CELL_H = measureCellHeight();
-document.documentElement.style.setProperty('--cell-w', `${CELL_W}px`);
-document.documentElement.style.setProperty('--cell-h', `${CELL_H}px`);
+let CELL_W = measureCellWidth();
+let CELL_H = measureCellHeight();
+
+function applyCellVars() {
+  document.documentElement.style.setProperty('--cell-w', `${CELL_W}px`);
+  document.documentElement.style.setProperty('--cell-h', `${CELL_H}px`);
+}
+applyCellVars();
+
+// The font now ships with the app instead of being installed on the machine, and a webfont
+// is not guaranteed to be loaded when the first script runs — so the measurement above can
+// land on the generic `monospace` fallback, which has different metrics. That would size
+// every terminal against a cell the terminal isn't actually drawing in.
+//
+// So measure again once the face is really there. `document.fonts.load` resolves the
+// specific face; `ready` waits for the rest of the page's fonts to settle behind it. In
+// practice this is a few milliseconds off local disk, and nothing has opened a terminal
+// yet (launch shows the welcome pane, not a tab) — the re-measure is the belt to that
+// braces, for the case where a tab is already open.
+fontsReady().then(() => {
+  const w = measureCellWidth();
+  const h = measureCellHeight();
+  if (w === CELL_W && h === CELL_H) return;
+  CELL_W = w;
+  CELL_H = h;
+  applyCellVars();
+  fitAll();
+});
+
+function fontsReady() {
+  try {
+    return Promise.all([
+      document.fonts.load(`${FONT_SIZE}px ${FONT_FAMILY}`),
+      document.fonts.load(`bold ${FONT_SIZE}px ${FONT_FAMILY}`),
+    ])
+      .then(() => document.fonts.ready)
+      .catch(() => null);
+  } catch {
+    return Promise.resolve(null);
+  }
+}
+
+// Last segment of a path, for display. Splits on both separators because a Windows cwd
+// arrives as `C:\Users\…` and a POSIX one as `/Users/…`, and the renderer has no `path`
+// module to ask.
+function baseName(dir) {
+  if (!dir) return '';
+  return dir.split(/[\\/]/).filter(Boolean).pop() || dir;
+}
 
 function el(tag, className, text) {
   const n = document.createElement(tag);
@@ -59,6 +104,28 @@ function el(tag, className, text) {
 }
 
 document.documentElement.style.setProperty('--header-h', `${window.ptyAPI.headerHeight}px`);
+
+// Two platform facts the page needs and can't work out for itself, resolved in the main
+// process (see platform.js). Applied here rather than in CSS media queries because neither
+// one is a media feature — they're what the *window* was constructed with.
+if (!window.platformAPI.vibrancy) document.body.classList.add('no-vibrancy');
+if (!window.platformAPI.titleBarInset) document.body.classList.add('no-titlebar-inset');
+
+// Degradations the app can't paper over. Deduplicated by `kind` so a poll that keeps
+// failing doesn't stack the same sentence, and additive so a second, different problem
+// doesn't overwrite the first.
+const warningsEl = document.getElementById('warnings');
+const warnings = new Map();
+
+function renderWarnings() {
+  warningsEl.replaceChildren(...Array.from(warnings.values(), (m) => el('div', 'warning', m)));
+}
+
+window.meshAPI.onWarning(({ kind, message }) => {
+  if (!message || warnings.has(kind)) return;
+  warnings.set(kind, message);
+  renderWarnings();
+});
 
 // --------------------------------------------------------------------- tabs
 //
@@ -114,6 +181,29 @@ function fitAll() {
 }
 window.addEventListener('resize', fitAll);
 
+// Dictation shifts the whole window sideways, and this is why. xterm parks its hidden
+// helper textarea *at the cursor cell* (`_syncTextArea` sets left/top/width to that one
+// cell) and macOS dictation types the entire utterance into it. The caret immediately
+// sits hundreds of pixels right of a box one cell wide, so Chromium scrolls every
+// ancestor to reveal it — including `body`, which is `overflow: hidden` and therefore
+// has no scrollbar to scroll back with. The UI just stays displaced.
+//
+// Nothing in this layout is ever meant to scroll horizontally, and vertically only two
+// things are: the sidebar list and xterm's own viewport. So snap anything else back to
+// the origin as it happens. Capture phase, because these scrolls don't bubble.
+const SCROLLERS = '#list, #recent-dirs, .xterm-viewport';
+document.addEventListener(
+  'scroll',
+  (e) => {
+    const el = e.target === document ? document.scrollingElement : e.target;
+    if (!el || el.nodeType !== 1) return;
+    const own = el.matches?.(SCROLLERS);
+    if (el.scrollLeft) el.scrollLeft = 0;
+    if (!own && el.scrollTop) el.scrollTop = 0;
+  },
+  true
+);
+
 function setActive(tabId) {
   if (!tabs.has(tabId)) return;
   activeTabId = tabId;
@@ -152,7 +242,16 @@ function closeTab(tabId) {
   }
 }
 
+// xterm measures its cell against the container at `open()` time, so opening a terminal
+// before the bundled font has loaded bakes the fallback's metrics into that terminal for
+// good — a resize won't fix it, because the font it re-measures is now the right one but
+// the geometry it was built with isn't. Waiting costs nothing after the first tab: the
+// promise is already settled and this is one microtask.
 function openTab(opts) {
+  fontsReady().then(() => createTerminal(opts));
+}
+
+function createTerminal(opts) {
   const host = el('div', 'term-host hidden');
   contentEl.appendChild(host);
 
@@ -220,6 +319,16 @@ const dirNameEl = dirEl.querySelector('.dir-name');
 
 let windowDir = localStorage.getItem('windowDir') || null;
 
+// That path was written on some previous launch and nothing guarantees it still resolves —
+// a renamed repo, an unmounted disk, a restored machine. Left alone it scopes the list to a
+// folder with nothing in it, next to a header naming a directory that isn't there. Checked
+// once, asynchronously, because it costs a stat and the answer only matters for the chrome.
+if (windowDir) {
+  window.meshAPI.dirExists(windowDir).then((exists) => {
+    if (!exists) setWindowDir(null);
+  });
+}
+
 function setWindowDir(dir) {
   if (dir === windowDir) return;
   windowDir = dir || null;
@@ -231,9 +340,7 @@ function setWindowDir(dir) {
 
 function syncDirButton() {
   dirEl.classList.toggle('unset', !windowDir);
-  dirNameEl.textContent = windowDir
-    ? windowDir.split('/').filter(Boolean).pop() || '/'
-    : 'Choose folder';
+  dirNameEl.textContent = windowDir ? baseName(windowDir) : 'Choose folder';
   dirEl.title = windowDir
     ? `${windowDir} — click to point this window somewhere else`
     : 'Choose the folder this window is pointed at';
@@ -261,12 +368,49 @@ function showWelcome(on) {
 }
 
 const newAgentEl = document.getElementById('new-agent');
+const welcomeSubEl = document.getElementById('welcome-sub');
+
+// Null until the main process has finished looking; `found: false` is a different state
+// from "haven't checked yet", and only the first one should disable anything.
+let claudeInfo = null;
+
+function claudeMissing() {
+  return Boolean(claudeInfo && !claudeInfo.found);
+}
 
 function syncNewAgentButton() {
-  newAgentEl.title = windowDir
-    ? `Start another Claude Code session in ${windowDir}`
-    : 'Start a Claude Code session — pick a folder';
+  // Every tab is a `claude` process. With no binary there is nothing a click could start,
+  // so the button says why instead of launching a terminal that exits immediately.
+  newAgentEl.disabled = claudeMissing();
+  newAgentEl.title = claudeMissing()
+    ? 'Claude Code CLI not found — install it, then reopen AgentMesh'
+    : windowDir
+      ? `Start another Claude Code session in ${windowDir}`
+      : 'Start a Claude Code session — pick a folder';
 }
+
+// The welcome pane is the first thing a fresh install sees, and on a machine with no CLI
+// it is the only thing — so it carries the diagnosis rather than the sidebar strip alone.
+function syncWelcomeCopy() {
+  pickDirEl.disabled = claudeMissing();
+  welcomeSubEl.textContent = claudeMissing()
+    ? 'Claude Code CLI not found. Install it and make sure `claude` runs in your shell, then reopen AgentMesh.'
+    : 'Pick a folder to start a Claude Code session in.';
+  welcomeSubEl.classList.toggle('warn', claudeMissing());
+}
+
+function applyClaudeInfo(info) {
+  claudeInfo = info || null;
+  syncNewAgentButton();
+  syncWelcomeCopy();
+}
+
+window.meshAPI.onClaudeInfo(applyClaudeInfo);
+// Also ask directly: a reload after the main process already resolved would otherwise
+// never see the push, which only fires once per resolve.
+window.meshAPI.claudeInfo().then((info) => {
+  if (info && info.source !== 'unresolved') applyClaudeInfo(info);
+});
 
 // A session's cwd is fixed at spawn and decides which project it belongs to, so the
 // folder is asked for up front rather than inherited from wherever the app happened
@@ -305,7 +449,7 @@ function renderRecentDirs() {
     const icon = el('span', 'icon');
     icon.innerHTML = FOLDER_SVG;
     node.appendChild(icon);
-    node.appendChild(el('span', 'name', dir.split('/').filter(Boolean).pop() || dir));
+    node.appendChild(el('span', 'name', baseName(dir)));
     node.appendChild(el('span', 'path', dir));
     node.title = dir;
     node.addEventListener('click', () => newSessionHere(dir));
@@ -513,9 +657,7 @@ const filterEl = document.getElementById('filter');
 let rows = [];
 // Default is scoped, and per *window*: with several AgentMesh windows open on different
 // repos, a window should answer "what's running on what I'm looking at" first and act as a
-// machine-wide mesh view second. `sessions.js` also computes `isCurrentProject`, but that
-// is against `process.cwd()` — where the app was launched, which for a Finder launch is
-// `/` and means nothing. The window's own current folder is the active tab's cwd.
+// machine-wide mesh view second. The window's own current folder is the active tab's cwd.
 let projectOnly = localStorage.getItem('projectOnly') !== 'false';
 let scopedDir = null; // the folder actually being filtered on, null when showing everything
 let recentOpen = false; // history is noise until asked for; live agents are the point
@@ -1031,7 +1173,7 @@ function makeTabRow(tabId) {
   });
 
   node._update = (tab) => {
-    const dir = tab.cwd ? tab.cwd.split('/').filter(Boolean).pop() : null;
+    const dir = tab.cwd ? baseName(tab.cwd) : null;
     label.textContent = tab.title || dir || 'Session';
     metaEl.textContent = tab.title && dir ? dir : tab.cwd || 'starting…';
     node.classList.toggle('active-tab', tabId === activeTabId);
@@ -1263,10 +1405,13 @@ listEl.addEventListener('keydown', (e) => {
   }
 });
 
-// ⌘0 into the sidebar, ⌘1–9 to the nth terminal. These are caught on the document because
-// the terminal has focus almost all the time and xterm never forwards ⌘-chords to the pty.
+// ⌘0 / Ctrl+0 into the sidebar, ⌘1–9 to the nth terminal. These are caught on the document
+// because the terminal has focus almost all the time and xterm never forwards those chords
+// to the pty. Accepting either modifier rather than branching on platform: Ctrl-digit is not
+// a chord Claude Code's TUI or a shell claims, so there is nothing to collide with on macOS.
 window.addEventListener('keydown', (e) => {
-  if (!e.metaKey || e.altKey || e.ctrlKey || e.shiftKey) return;
+  const accel = e.metaKey || e.ctrlKey;
+  if (!accel || e.altKey || e.shiftKey || (e.metaKey && e.ctrlKey)) return;
   if (document.activeElement && document.activeElement.tagName === 'INPUT') return;
 
   if (e.key === '0') {
@@ -1321,9 +1466,15 @@ function render() {
   if (!visible.length && !orphanTabs.length) {
     // An empty scoped list is a dead end unless it says what it's empty *of*, and
     // offers the list that isn't.
+    // Three different emptinesses, and they mean different things. A scoped list is hiding
+    // sessions that exist. An unscoped list with nothing behind it on a machine that has
+    // never run the CLI is a first launch, not a failure — the sidebar is a view onto
+    // Claude Code's own state, so before there is any state there is nothing to show.
     emptyEl.textContent = scopedDir
-      ? `No sessions in ${scopedDir.split('/').filter(Boolean).pop() || scopedDir}.`
-      : 'No sessions found.';
+      ? `No sessions in ${baseName(scopedDir)}.`
+      : rows.length
+        ? 'No sessions found.'
+        : 'No Claude Code sessions yet — start one and it shows up here.';
     syncChildren(listEl, hidden > 0 ? [emptyEl, moreEl] : [emptyEl]);
     syncRovingFocus();
     return;

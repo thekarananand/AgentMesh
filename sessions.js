@@ -302,7 +302,7 @@ function listTranscripts() {
   return out;
 }
 
-function list(currentCwd) {
+function list() {
   const live = readLive();
   const history = readHistory();
   const transcripts = listTranscripts().slice(0, MAX_SESSIONS);
@@ -348,7 +348,6 @@ function list(currentCwd) {
       jobId: l?.jobId || null,
       pid: l?.pid || null,
       socket: l?.socket || null,
-      isCurrentProject: Boolean(currentCwd && cwd === currentCwd),
     });
   }
 
@@ -383,7 +382,6 @@ function list(currentCwd) {
       jobId: l.jobId || null,
       pid: l.pid,
       socket: l.socket,
-      isCurrentProject: Boolean(currentCwd && l.cwd === currentCwd),
     });
   }
 

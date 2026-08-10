@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Hardened-runtime entitlements for a signed macOS build.
+
+  Every one of these is here because something concrete needs it, not as a blanket loosening:
+
+  - allow-jit / allow-unsigned-executable-memory: V8. Electron does not run under the
+    hardened runtime without them.
+  - disable-library-validation: node-pty is a native module loaded at runtime, and its
+    `spawn-helper` is a separate executable shipped unpacked from the asar. Library
+    validation rejects both unless they carry the same team signature.
+  - inherit on the child: the pty's whole job is to exec the user's login shell and, through
+    it, the Claude Code CLI. Those are not our binaries and never will be.
+
+  Unsigned builds ignore this file entirely — it only matters once CSC_* credentials exist.
+-->
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+  <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+  <true/>
+  <key>com.apple.security.inherit</key>
+  <true/>
+</dict>
+</plist>

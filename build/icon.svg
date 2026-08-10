@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- Source art for the app icon. `npm run icon` rasterizes this to build/icon.png, which
+       is what electron-builder consumes (it derives .icns/.ico/all PNG sizes from that one
+       file). The PNG is committed, so building the app needs no image tooling.
+
+       The mark is the sidebar: several agents, one of them working. Palette is the app's own
+       — chrome background, Primer's accent blue for idle peers, Primer's attention amber for
+       the busy one, the same three-state vocabulary the status glyphs use. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#242830"/>
+      <stop offset="1" stop-color="#15181d"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1024" height="1024" rx="228" fill="url(#bg)"/>
+  <rect x="4" y="4" width="1016" height="1016" rx="226" fill="none" stroke="#ffffff14" stroke-width="8"/>
+
+  <!-- Links first, so the nodes sit on top of them. -->
+  <g stroke="#4aa5f0" stroke-width="26" stroke-linecap="round" opacity="0.45">
+    <path d="M512 340 L292 640"/>
+    <path d="M512 340 L732 640"/>
+    <path d="M292 640 L732 640"/>
+  </g>
+
+  <!-- The busy agent, in the amber every WAITING/RUNNING surface in the app uses. -->
+  <circle cx="512" cy="340" r="104" fill="#d29922"/>
+  <!-- Its two idle peers. -->
+  <circle cx="292" cy="640" r="88" fill="#4aa5f0"/>
+  <circle cx="732" cy="640" r="88" fill="#4aa5f0"/>
+</svg>

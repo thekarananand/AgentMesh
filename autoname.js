@@ -15,12 +15,19 @@
 // Anything already carrying a deliberate name is left completely alone.
 
 const { rename } = require('./rename');
+const config = require('./config');
 
-// 'tabs' — only sessions running in one of our own tabs.
-// 'all'  — every live session on the machine, including ones started in another
-//          terminal. Correct for a fleet view, but it renames things this app
-//          didn't launch, so it isn't the default.
-const SCOPE = 'tabs';
+// Scope comes from the user's settings, because renaming is a write into state this app
+// doesn't own:
+//   'tabs' — only sessions running in one of our own tabs (the default).
+//   'all'  — every live session on the machine, including ones started in another
+//            terminal. Correct for a fleet view, but it renames things this app didn't
+//            launch, which is not a decision to make on someone else's behalf.
+// `autoname.enabled: false` turns the whole thing off and leaves Claude Code's own
+// cwd-derived autonames alone.
+function settings() {
+  return config.get().autoname;
+}
 
 const MAX_WORDS = 4;
 
@@ -49,9 +56,10 @@ function candidateName(row) {
 }
 
 function shouldName(row) {
+  if (!settings().enabled) return false;
   if (!row.live || !row.socket) return false;
   if (row.customTitle) return false; // already deliberately named — never touch
-  if (SCOPE === 'tabs' && !row.tabId) return false;
+  if (settings().scope === 'tabs' && !row.tabId) return false;
   if (attempted.has(row.sessionId)) return false;
   return Boolean(candidateName(row));
 }
@@ -73,4 +81,4 @@ async function autoName(rows, onDone) {
   if (renamed && typeof onDone === 'function') onDone();
 }
 
-module.exports = { autoName, kebab, SCOPE };
+module.exports = { autoName, kebab };

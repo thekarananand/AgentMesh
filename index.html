@@ -5,8 +5,59 @@
   <title>AgentMesh</title>
   <link rel="stylesheet" href="node_modules/xterm/css/xterm.css" />
   <style>
+    /* ------------------------------------------------------------------- fonts */
+
+    /* Both families ship with the app (assets/fonts, regenerate with
+       `npm run fonts`). They used to be Homebrew casks the user had to install by hand,
+       which made a clone on any other machine silently wrong: not just uglier, but
+       *mis-measured*, because renderer.js sizes the terminal cell against the monospace
+       family and xterm lays out against that cell. Both are SIL OFL 1.1, which is what
+       makes vendoring them legal — the license texts sit beside them and stay there.
+
+       `font-display: block` on the terminal face is deliberate: a swap from a fallback
+       would re-measure the grid under a running terminal. renderer.js waits for the face
+       to load before it measures anything, so there is nothing to swap to. */
+    @font-face {
+      font-family: 'JetBrainsMono Nerd Font Mono';
+      src: url('assets/fonts/JetBrainsMonoNerdFontMono-Regular.woff2') format('woff2');
+      font-weight: 400; font-style: normal; font-display: block;
+    }
+    @font-face {
+      font-family: 'JetBrainsMono Nerd Font Mono';
+      src: url('assets/fonts/JetBrainsMonoNerdFontMono-Bold.woff2') format('woff2');
+      font-weight: 700; font-style: normal; font-display: block;
+    }
+    @font-face {
+      font-family: 'JetBrainsMono Nerd Font Mono';
+      src: url('assets/fonts/JetBrainsMonoNerdFontMono-Italic.woff2') format('woff2');
+      font-weight: 400; font-style: italic; font-display: block;
+    }
+    @font-face {
+      font-family: 'JetBrainsMono Nerd Font Mono';
+      src: url('assets/fonts/JetBrainsMonoNerdFontMono-BoldItalic.woff2') format('woff2');
+      font-weight: 700; font-style: italic; font-display: block;
+    }
+
+    /* Inter is variable, so two files cover every weight the chrome uses. */
+    @font-face {
+      font-family: 'Inter';
+      src: url('assets/fonts/InterVariable.woff2') format('woff2-variations');
+      font-weight: 100 900; font-style: normal; font-display: swap;
+    }
+    @font-face {
+      font-family: 'Inter';
+      src: url('assets/fonts/InterVariable-Italic.woff2') format('woff2-variations');
+      font-weight: 100 900; font-style: italic; font-display: swap;
+    }
+
     /* Single tint layer only — see CLAUDE.md, anything above ~0.5 alpha kills vibrancy. */
     html, body { margin: 0; height: 100%; background: #08090945; }
+
+    /* Without OS vibrancy behind it (anything that isn't macOS) that 27% alpha is a
+       see-through window, not a subtler one — nothing is painting the backdrop. So the
+       page paints its own, at the same colour the blur resolves to. Set from
+       platformAPI.vibrancy in renderer.js before the first paint. */
+    body.no-vibrancy, html:has(body.no-vibrancy) { background: #0f1116; }
 
     :root {
       --chrome-bg: #1b1e24;
@@ -56,7 +107,13 @@
       font-feature-settings: "cv05" 1, "ss03" 1;
       -webkit-font-smoothing: antialiased;
       color: var(--fg-muted);
-      overflow: hidden;
+      /* `clip`, not `hidden`: hidden still makes this a scroll container, one with no
+         scrollbar, and Chromium will happily scroll it programmatically to chase a
+         caret it thinks is off-screen (see the scroll clamp in renderer.js — macOS
+         dictation into xterm's one-cell helper textarea does exactly that, and the
+         whole window ends up displaced with no way to scroll back). `clip` means the
+         element is not scrollable at all, so there is nothing to displace. */
+      overflow: clip;
     }
 
     /* Every control in the chrome is a real <button>: focusable, Enter/Space-activated,
@@ -137,6 +194,11 @@
       gap: 6px;
       padding: 0 10px 0 84px; /* left pad clears the traffic lights */
     }
+
+    /* Only macOS floats window buttons over the sidebar's top-left corner. Windows draws
+       its overlay controls top-right, over the terminal pane, and Linux draws none at all —
+       so off macOS that 84px is dead space in front of the folder name. */
+    body.no-titlebar-inset #sidebar-header { padding-left: 10px; }
 
     /* The header answers "where is this window pointed", and nothing else. It used to
        carry a session count (a number nobody acts on) and a '+' that opened a folder
@@ -559,6 +621,7 @@
       flex: 1 1 auto;
       min-height: 0;
       position: relative;
+      overflow: clip; /* same reason as body — never a scroll container */
     }
 
     /* One cell of breathing room on every side, so the terminal reads as a framed
@@ -571,6 +634,7 @@
       inset: 0;
       box-sizing: border-box;
       padding: var(--cell-h) var(--cell-w);
+      overflow: clip;
     }
     .term-host.hidden {
       visibility: hidden;
@@ -618,6 +682,19 @@
       line-height: 1.45;
       color: var(--fg-subtle);
       margin-top: -12px;
+      max-width: 42ch;
+      text-wrap: balance;
+    }
+    /* Missing CLI is the one thing this line ever has to *warn* about, and it is the same
+       amber the sidebar's warning strip and a WAITING row use. */
+    #welcome-sub.warn { color: var(--status-attention); }
+
+    /* Nothing to start without a binary — a disabled control that still looks clickable is
+       worse than one that reads as unavailable. */
+    #pick-dir:disabled, #new-agent:disabled {
+      opacity: 0.4;
+      cursor: default;
+      pointer-events: none;
     }
 
     #pick-dir {
@@ -683,6 +760,23 @@
       text-overflow: ellipsis;
       white-space: nowrap;
     }
+
+    /* ----------------------------------------------------------------- warnings */
+
+    /* Same `:empty`-is-hidden contract as the usage footer, and directly above it, because
+       both answer about the app rather than any one row. Amber, not red: nothing here is
+       broken, something is unavailable — the same vocabulary as a WAITING row. */
+    #warnings {
+      flex: 0 0 auto;
+      padding: 8px 12px;
+      border-top: 1px solid var(--border-subtle);
+      font-size: 11px;
+      line-height: 1.45;
+      color: var(--status-attention);
+      -webkit-app-region: no-drag;
+      user-select: text;
+    }
+    #warnings:empty { display: none; }
 
     /* ---------------------------------------------------------------- plan usage */
 
@@ -826,6 +920,9 @@
       <span>New session</span>
     </button>
     <div id="list" role="listbox" aria-label="Claude Code sessions"></div>
+    <!-- Degradations that would otherwise be invisible: a feature that stopped working
+         with no symptom is worse than one that says so. Empty and hidden by default. -->
+    <div id="warnings" role="status"></div>
     <div id="usage" title="Claude plan usage · click to refresh"></div>
     <div id="sidebar-resizer"></div>
   </div>

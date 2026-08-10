@@ -99,6 +99,17 @@ async function readCredentials() {
   return parseCredentials(readFileQuiet(CREDENTIALS_FILE));
 }
 
+// The user can switch the footer — and with it this module's only network call — off
+// entirely. Read through `config` on every check rather than captured once, so toggling it
+// takes effect on the next poll instead of the next launch.
+function disabledByUser() {
+  try {
+    return require('./config').get().usage.enabled === false;
+  } catch {
+    return false;
+  }
+}
+
 // Plan limits don't apply to API-key or third-party-provider sessions — the CLI models
 // this as its own `rate_limits_available` flag. Better no widget than a wrong one.
 function usesOwnBilling() {
@@ -209,6 +220,9 @@ function stale(value) {
 }
 
 function fallback() {
+  // Off means off, including the copy the CLI already left on disk — a footer painted from
+  // cache would read as the app having fetched it.
+  if (disabledByUser()) return null;
   if (last) return stale(last);
   const cached = readCachedBody();
   if (!cached) return null;
@@ -216,7 +230,7 @@ function fallback() {
 }
 
 async function load() {
-  if (usesOwnBilling()) return null;
+  if (disabledByUser() || usesOwnBilling()) return null;
 
   let creds = await readCredentials();
   if (!creds) return fallback();

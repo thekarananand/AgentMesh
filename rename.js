@@ -16,6 +16,7 @@
 
 const fs = require('fs');
 const net = require('net');
+const { canUseSocket } = require('./platform');
 
 const CONNECT_TIMEOUT_MS = 1500;
 const MAX_NAME = 200;
@@ -120,7 +121,10 @@ async function rename(row, rawName) {
   if (!name) return { ok: false, via: null, error: 'empty name' };
   if (!row) return { ok: false, via: null, error: 'unknown session' };
 
-  if (row.socket && row.pid && pidAlive(row.pid) && fs.existsSync(row.socket)) {
+  // `canUseSocket` rather than `fs.existsSync`: a live named pipe on Windows does not exist
+  // as far as `existsSync` is concerned, so the plain check would route every Windows rename
+  // down the transcript path forever, whether or not the CLI is listening.
+  if (row.socket && row.pid && pidAlive(row.pid) && canUseSocket(row.socket)) {
     const res = await renameLive(row.socket, row.sessionId, name);
     if (res.ok) return { ok: true, via: 'socket', name, error: null };
     // Fall through: a live session that won't take the message still has a
