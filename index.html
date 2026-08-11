@@ -60,14 +60,14 @@
     body.no-vibrancy, html:has(body.no-vibrancy) { background: #0f1116; }
 
     :root {
-      --chrome-bg: #1b1e24;
+      --chrome-bg: #242428;
 
       /* Foreground ramp. Three steps, used consistently: default is content, muted is
          supporting, subtle is metadata. A fourth step would just be indecision. */
-      --fg-default: #d7dae0;
-      --fg-muted: #abb2bf;
-      --fg-subtle: #6c7383;
-      --fg-faint: #4f5666;
+      --fg-default: #e6e6e6;
+      --fg-muted: #c5c5c9;
+      --fg-subtle: #8a8a91;
+      --fg-faint: #5f5f67;
 
       /* Status colors are Primer's dark-theme functional tokens verbatim
          (@primer/primitives dist/css/functional/themes/dark.css) — GitHub Actions
@@ -92,6 +92,11 @@
       /* One easing curve for everything non-gesture. Anything a finger can grab uses a
          spring in renderer.js instead — a fixed curve can't be interrupted mid-flight. */
       --ease: cubic-bezier(0.32, 0.72, 0, 1);
+
+      /* Premium sidebar hover states — higher contrast, subtle feedback */
+      --overlay-hover: rgba(255, 255, 255, 0.08);
+      --overlay-press: rgba(255, 255, 255, 0.12);
+      --border-subtle: rgba(255, 255, 255, 0.08);
 
       /* one terminal cell, measured at runtime in renderer.js */
       --cell-w: 8px;
@@ -137,7 +142,8 @@
     }
 
     /* Opaque on purpose: this kills vibrancy behind the sidebar (see CLAUDE.md
-       gotcha #2) and leaves the glass to the terminal pane only. */
+       gotcha #2) and leaves the glass to the terminal pane only. Premium design
+       with refined materials and improved spatial definition. */
     #sidebar {
       width: 248px;
       flex: 0 0 248px;
@@ -145,7 +151,7 @@
       box-sizing: border-box;
       position: relative;
       background: var(--chrome-bg);
-      border-right: 1px solid var(--border-subtle);
+      border-right: 1px solid #1a1a1f;
       display: flex;
       flex-direction: column;
       -webkit-app-region: drag;
@@ -211,19 +217,27 @@
       flex: 0 1 auto;
       min-width: 0;
       margin-right: auto;
+      margin-top: 2px;
       display: flex;
       align-items: center;
       gap: 5px;
-      padding: 3px 6px;
-      margin-left: -6px; /* the label optically aligns with the list, the padding doesn't */
-      border-radius: 5px;
+      padding: 0 5px 0 12px;
+      border-left: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 0 5px 5px 0;
       cursor: pointer;
       user-select: none;
       color: var(--fg-muted);
-      transition: background 140ms var(--ease), color 140ms var(--ease);
+      transition: background 140ms var(--ease), color 140ms var(--ease), border-color 140ms var(--ease);
     }
-    #dir:hover { background: var(--overlay-hover); color: var(--fg-default); }
-    #dir:active { background: var(--overlay-press); }
+    #dir:hover {
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--fg-default);
+      border-left-color: rgba(255, 255, 255, 0.12);
+    }
+    #dir:active {
+      background: rgba(255, 255, 255, 0.12);
+      transform: scale(0.99);
+    }
     #dir .dir-icon { display: inline-flex; flex: 0 0 auto; color: var(--fg-faint); }
     #dir .dir-icon svg { width: 13px; height: 13px; fill: currentColor; }
     #dir .dir-name {
@@ -259,35 +273,43 @@
       transition: background 140ms var(--ease), color 140ms var(--ease), transform 110ms var(--ease);
     }
     #filter svg { width: 14px; height: 14px; fill: currentColor; }
-    #filter:hover { background: var(--overlay-hover); color: var(--fg-muted); }
-    #filter:active { transform: scale(0.92); }
-    #filter.on { background: #4aa5f024; color: var(--accent); }
+    #filter:hover { background: rgba(255, 255, 255, 0.08); color: var(--fg-default); }
+    #filter:active { transform: scale(0.94); }
+    #filter.on { background: rgba(74, 165, 240, 0.15); color: var(--accent); }
     /* Armed but with no folder to scope to: the list is showing everything, so the toggle
        says so by dimming rather than lighting up. */
     #filter.empty { opacity: 0.4; }
 
-    /* One button, one meaning: start a session in the folder the header names. */
+    /* One button, one meaning: start a session in the folder the header names.
+       Premium styling with refined feedback and spatial consistency. */
     #new-agent {
       -webkit-app-region: no-drag;
       flex: 0 0 auto;
       margin: 4px 10px 8px;
-      padding: 7px 9px;
+      padding: 8px 10px;
       display: flex;
       align-items: center;
-      gap: 7px;
+      justify-content: center;
+      gap: 6px;
       font-size: 11px;
       font-weight: 500;
-      color: var(--fg-muted);
-      background: #ffffff0a;
-      border: 1px solid var(--border-subtle);
+      letter-spacing: 0.3px;
+      color: var(--fg-default);
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.1);
       border-radius: var(--radius);
       cursor: pointer;
       user-select: none;
-      transition: background 140ms var(--ease), border-color 140ms var(--ease),
-                  color 140ms var(--ease), transform 110ms var(--ease);
+      transition: all 140ms var(--ease);
     }
-    #new-agent:hover { color: var(--fg-default); background: #ffffff14; border-color: #ffffff26; }
-    #new-agent:active { background: var(--overlay-press); transform: scale(0.985); }
+    #new-agent:hover {
+      background: rgba(255, 255, 255, 0.12);
+      border-color: rgba(255, 255, 255, 0.15);
+    }
+    #new-agent:active {
+      background: rgba(255, 255, 255, 0.16);
+      transform: scale(0.98);
+    }
     #new-agent .plus { display: inline-flex; color: var(--accent); }
     #new-agent .plus svg { width: 13px; height: 13px; fill: currentColor; }
 
@@ -360,20 +382,20 @@
       cursor: pointer;
       transition: background 140ms var(--ease), transform 110ms var(--ease);
     }
-    .row:hover { background: var(--overlay-hover); }
+    .row:hover { background: rgba(255, 255, 255, 0.06); }
     /* Feedback on press, not on release — waiting for the click to land feels dead. */
-    .row:active { background: var(--overlay-press); transform: scale(0.985); }
+    .row:active { background: rgba(255, 255, 255, 0.1); transform: scale(0.98); }
 
     /* Two different facts, and they used to render as one. `.open` is "this window hosts
        a terminal for it" — true of every tab at once, so it gets a fill and nothing more.
        The accent bar means "and this is the one on screen", which is true of exactly one
        row, so the bar is the answer to "where am I" and never appears twice. */
-    .row.open { background: #4aa5f014; }
-    .row.open:hover { background: #4aa5f021; }
+    .row.open { background: rgba(74, 165, 240, 0.1); }
+    .row.open:hover { background: rgba(74, 165, 240, 0.15); }
 
-    .row.active-tab { background: #4aa5f02b; }
-    .row.active-tab:hover { background: #4aa5f036; }
-    .row.active-tab .row-title { color: #eaf2fb; }
+    .row.active-tab { background: rgba(74, 165, 240, 0.2); }
+    .row.active-tab:hover { background: rgba(74, 165, 240, 0.25); }
+    .row.active-tab .row-title { color: #f0f5ff; }
     .row.active-tab::before,
     .row.pending::before {
       content: '';
