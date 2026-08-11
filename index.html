@@ -213,7 +213,8 @@
     #dir {
       -webkit-app-region: no-drag;
       /* Hugs its label rather than filling the header — a hover highlight the width of the
-         sidebar reads as a banner, not a button. */
+         sidebar reads as a banner, not a button. Refined material design following Apple
+         principles: translucent surface with spatial definition. */
       flex: 0 1 auto;
       min-width: 0;
       margin-right: auto;
@@ -221,21 +222,23 @@
       display: flex;
       align-items: center;
       gap: 5px;
-      padding: 0 5px 0 12px;
-      border-left: 1px solid rgba(255, 255, 255, 0.08);
+      padding: 5px 5px 5px 12px;
+      border-left: 1px solid rgba(255, 255, 255, 0.06);
       border-radius: 0 5px 5px 0;
       cursor: pointer;
       user-select: none;
       color: var(--fg-muted);
-      transition: background 140ms var(--ease), color 140ms var(--ease), border-color 140ms var(--ease);
+      transition: all 180ms var(--ease);
     }
     #dir:hover {
-      background: rgba(255, 255, 255, 0.08);
+      background: rgba(74, 165, 240, 0.15);
       color: var(--fg-default);
-      border-left-color: rgba(255, 255, 255, 0.12);
+      border-left-color: rgba(74, 165, 240, 0.35);
+      border-radius: 5px;
     }
     #dir:active {
-      background: rgba(255, 255, 255, 0.12);
+      background: rgba(74, 165, 240, 0.22);
+      border-left-color: rgba(74, 165, 240, 0.45);
       transform: scale(0.99);
     }
     #dir .dir-icon { display: inline-flex; flex: 0 0 auto; color: var(--fg-faint); }
