@@ -217,6 +217,35 @@ function createWindow() {
     return res.canceled || !res.filePaths.length ? null : res.filePaths[0];
   });
 
+  // Search for files by name in common locations (used for drag-and-drop)
+  ipcMain.handle('fs:find-files', async (event, filenames) => {
+    const searchPaths = [
+      os.homedir(),
+      path.join(os.homedir(), 'Desktop'),
+      path.join(os.homedir(), 'Downloads'),
+      os.tmpdir(),
+    ];
+
+    const results = {};
+    for (const filename of filenames) {
+      let found = null;
+
+      for (const searchPath of searchPaths) {
+        try {
+          const fullPath = path.join(searchPath, filename);
+          if (fs.existsSync(fullPath)) {
+            found = fullPath;
+            break;
+          }
+        } catch {}
+      }
+
+      results[filename] = found;
+    }
+
+    return results;
+  });
+
   ipcMain.on('sessions:reveal', (event, sessionId) => {
     const row = sessions.list().find((s) => s.sessionId === sessionId);
     if (row && row.cwd) electronShell.openPath(row.cwd);

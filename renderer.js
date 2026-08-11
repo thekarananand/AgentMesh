@@ -3,7 +3,7 @@ const THEME = {
   foreground: '#abb2bf',
   cursor: '#abb2bf',
   cursorAccent: '#080909',
-  selectionBackground: '#555a6345',
+  selectionBackground: '#4aa5f040',
   black: '#3f4451',
   brightBlack: '#4f5666',
   red: '#e05561',
@@ -298,6 +298,78 @@ function createTerminal(opts) {
       window.ptyAPI.sendInput(tabId, '\x1b\r');
       return false;
     });
+
+    // Drag and drop file/folder paths into the terminal
+    host.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+      host.classList.add('drag-over');
+    });
+
+    host.addEventListener('dragleave', () => {
+      host.classList.remove('drag-over');
+    });
+
+    host.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      host.classList.remove('drag-over');
+
+      let paths = [];
+
+      // Try first: get file paths from file objects (Electron-specific)
+      if (e.dataTransfer.files.length) {
+        paths = Array.from(e.dataTransfer.files).map((file) => {
+          // Electron File objects from OS drag-and-drop have a `path` property
+          let filePath = file.path || file.name;
+          console.log('File drag data:', { name: file.name, path: file.path, filePath });
+          return filePath;
+        });
+      }
+
+      // Try second: parse from dataTransfer.getData (alternative method)
+      if (!paths.length && e.dataTransfer.types.includes('text/uri-list')) {
+        const uriList = e.dataTransfer.getData('text/uri-list');
+        if (uriList) {
+          paths = uriList
+            .split('\n')
+            .filter((line) => line.startsWith('file://'))
+            .map((uri) => {
+              try {
+                return decodeURIComponent(new URL(uri).pathname);
+              } catch {
+                return uri;
+              }
+            });
+          console.log('Paths from URI list:', paths);
+        }
+      }
+
+      if (!paths.length) return;
+
+      // If we only got filenames (no paths), search for them on the file system
+      const hasOnlyNames = paths.every((p) => !p.includes('/'));
+      if (hasOnlyNames) {
+        console.log('Only filenames found, searching for full paths:', paths);
+        try {
+          const found = await window.meshAPI.findFiles(paths);
+          console.log('Search results:', found);
+          paths = paths.map((name) => found[name] || name);
+        } catch (err) {
+          console.error('Error searching for files:', err);
+        }
+      }
+
+      // Quote if path contains spaces or special shell characters
+      const quotedPaths = paths.map((filePath) => {
+        return filePath.includes(' ') || filePath.includes('$') || filePath.includes(';')
+          ? `'${filePath.replace(/'/g, "'\\''")}'`
+          : filePath;
+      });
+
+      console.log('Inserting paths:', quotedPaths.join(' '));
+      window.ptyAPI.sendInput(tabId, quotedPaths.join(' '));
+    });
+
     // Whatever row was pulsing got what it asked for — a fork mints a new session id, so
     // the row that was clicked will never bind to this tab and can't clear itself.
     for (const n of listEl.querySelectorAll('.row.pending')) n.classList.remove('pending');

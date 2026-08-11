@@ -1,31 +1,81 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
-  <!-- Source art for the app icon. `npm run icon` rasterizes this to build/icon.png, which
-       is what electron-builder consumes (it derives .icns/.ico/all PNG sizes from that one
-       file). The PNG is committed, so building the app needs no image tooling.
-
-       The mark is the sidebar: several agents, one of them working. Palette is the app's own
-       — chrome background, Primer's accent blue for idle peers, Primer's attention amber for
-       the busy one, the same three-state vocabulary the status glyphs use. -->
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#242830"/>
-      <stop offset="1" stop-color="#15181d"/>
-    </linearGradient>
+    <style>
+      .bg { fill: #1b1e24; }
+      .accent { fill: #5865f2; }
+      .highlight { fill: #7289da; }
+      .text { fill: #ffffff; }
+      .shadow { filter: drop-shadow(0 4px 8px rgba(0,0,0,0.3)); }
+      .glow { filter: drop-shadow(0 0 12px rgba(88,101,242,0.4)); }
+    </style>
+
+    <!-- Reusable rounded rect path -->
+    <mask id="roundedMask">
+      <rect width="1024" height="1024" fill="white" rx="200" ry="200"/>
+    </mask>
   </defs>
 
-  <rect width="1024" height="1024" rx="228" fill="url(#bg)"/>
-  <rect x="4" y="4" width="1016" height="1016" rx="226" fill="none" stroke="#ffffff14" stroke-width="8"/>
+  <!-- Background with rounded corners -->
+  <rect width="1024" height="1024" class="bg" rx="200" ry="200"/>
 
-  <!-- Links first, so the nodes sit on top of them. -->
-  <g stroke="#4aa5f0" stroke-width="26" stroke-linecap="round" opacity="0.45">
-    <path d="M512 340 L292 640"/>
-    <path d="M512 340 L732 640"/>
-    <path d="M292 640 L732 640"/>
+  <!-- Subtle gradient overlay for depth -->
+  <defs>
+    <linearGradient id="bgGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#2a2f3a;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#1b1e24;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" fill="url(#bgGradient)" rx="200" ry="200" opacity="0.6"/>
+
+  <!-- MAIN CONTENT AREA: Terminal/Mesh concept -->
+  <!-- You can build out the icon design here. Suggested elements:
+       - Terminal window grid/cells
+       - Connected nodes representing agents/mesh
+       - Tab metaphor
+       - Activity indicators (dots/glyphs)
+  -->
+
+  <!-- Placeholder: Three connected nodes (agents) -->
+  <g class="shadow">
+    <!-- Left node -->
+    <circle cx="300" cy="400" r="80" class="accent" opacity="0.9"/>
+    <circle cx="300" cy="400" r="70" fill="none" stroke="#7289da" stroke-width="8" opacity="0.6"/>
+
+    <!-- Center node (larger, main) -->
+    <circle cx="512" cy="520" r="100" class="accent" opacity="0.95"/>
+    <circle cx="512" cy="520" r="90" fill="none" stroke="#7289da" stroke-width="8" opacity="0.6"/>
+
+    <!-- Right node -->
+    <circle cx="724" cy="400" r="80" class="accent" opacity="0.9"/>
+    <circle cx="724" cy="400" r="70" fill="none" stroke="#7289da" stroke-width="8" opacity="0.6"/>
   </g>
 
-  <!-- The busy agent, in the amber every WAITING/RUNNING surface in the app uses. -->
-  <circle cx="512" cy="340" r="104" fill="#d29922"/>
-  <!-- Its two idle peers. -->
-  <circle cx="292" cy="640" r="88" fill="#4aa5f0"/>
-  <circle cx="732" cy="640" r="88" fill="#4aa5f0"/>
+  <!-- Connection lines between nodes -->
+  <line x1="300" y1="400" x2="512" y2="520" stroke="#5865f2" stroke-width="12" opacity="0.4" stroke-linecap="round"/>
+  <line x1="724" y1="400" x2="512" y2="520" stroke="#5865f2" stroke-width="12" opacity="0.4" stroke-linecap="round"/>
+  <line x1="300" y1="400" x2="724" y2="400" stroke="#5865f2" stroke-width="10" opacity="0.3" stroke-linecap="round"/>
+
+  <!-- Terminal window accent (top area) -->
+  <g class="shadow">
+    <rect x="200" y="120" width="624" height="180" rx="24" class="highlight" opacity="0.2"/>
+    <circle cx="250" cy="165" r="12" class="text" opacity="0.7"/>
+    <circle cx="310" cy="165" r="12" class="text" opacity="0.7"/>
+    <circle cx="370" cy="165" r="12" class="text" opacity="0.7"/>
+
+    <!-- Grid lines suggesting terminal cells -->
+    <line x1="200" y1="210" x2="824" y2="210" stroke="#7289da" stroke-width="2" opacity="0.3"/>
+    <line x1="200" y1="240" x2="824" y2="240" stroke="#7289da" stroke-width="2" opacity="0.25"/>
+    <line x1="200" y1="270" x2="824" y2="270" stroke="#7289da" stroke-width="2" opacity="0.2"/>
+  </g>
+
+  <!-- Highlight glow (bottom area) -->
+  <g class="glow">
+    <rect x="250" y="700" width="524" height="140" rx="20" class="accent" opacity="0.15"/>
+  </g>
+
+  <!-- Activity indicators (status dots) -->
+  <circle cx="850" cy="180" r="30" class="accent" opacity="0.8" class="glow"/>
+  <circle cx="850" cy="180" r="20" fill="none" stroke="#5865f2" stroke-width="6" opacity="0.5" class="glow"/>
+
 </svg>
