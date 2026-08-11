@@ -206,6 +206,9 @@
        so off macOS that 84px is dead space in front of the folder name. */
     body.no-titlebar-inset #sidebar-header { padding-left: 10px; }
 
+    /* In fullscreen, traffic lights disappear, so move folder selector left */
+    body.fullscreen #sidebar-header { padding-left: 10px; }
+
     /* The header answers "where is this window pointed", and nothing else. It used to
        carry a session count (a number nobody acts on) and a '+' that opened a folder
        picker — which read as "new session" and behaved as "change folder", the worst

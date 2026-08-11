@@ -111,6 +111,12 @@ document.documentElement.style.setProperty('--header-h', `${window.ptyAPI.header
 if (!window.platformAPI.vibrancy) document.body.classList.add('no-vibrancy');
 if (!window.platformAPI.titleBarInset) document.body.classList.add('no-titlebar-inset');
 
+// Handle fullscreen state — traffic lights disappear in fullscreen, so folder selector
+// should move to the left. Listen for both enter and exit fullscreen events.
+document.addEventListener('fullscreenchange', () => {
+  document.body.classList.toggle('fullscreen', document.fullscreenElement);
+});
+
 // Degradations the app can't paper over. Deduplicated by `kind` so a poll that keeps
 // failing doesn't stack the same sentence, and additive so a second, different problem
 // doesn't overwrite the first.
