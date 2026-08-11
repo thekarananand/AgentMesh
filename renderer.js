@@ -926,6 +926,7 @@ function relTime(ms) {
 function renderMeta(node, row) {
   const parts = [];
   if (row.live && row.kind === 'bg') parts.push('background');
+  if (row.promptCount) parts.push(`${row.promptCount} prompt${row.promptCount === 1 ? '' : 's'}`);
   if (row.project && !scopedDir) parts.push(row.project);
   if (row.gitBranch && row.gitBranch !== 'HEAD') parts.push(row.gitBranch);
   const when = relTime(row.updatedAt);
