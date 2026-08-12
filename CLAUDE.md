@@ -90,6 +90,10 @@ not the goal itself; a CLI gap is worth closing when it serves one of the three 
 - `index.html` — shell page, `@font-face` for the bundled fonts, sidebar + terminal split layout, welcome/folder-picker pane
 - `titlebar.js` — shared `HEADER_HEIGHT` constant (main + preload both require it)
 - `assets/fonts/` — the bundled woff2 faces and their OFL license texts. Shipped, not installed
+- `assets/logo-white.svg` — `build/icon.svg` recolored to solid white on a transparent background
+  (no separate source of truth; regenerate by hand from `icon.svg` if the mark changes). Used on
+  the welcome pane, where it sits on the app's own dark chrome rather than the icon's rounded
+  dark-square tile.
 - `build/` — packaging inputs: `icon.svg` (source art), `icon.png` (committed, what electron-builder consumes), `entitlements.mac.plist`
 - `tools/` — authoring scripts, never part of a build: `build-fonts.js` (ttf→woff2), `make-icon.js` (svg→png)
 
@@ -316,6 +320,15 @@ were dropped because they cost a full repaint of every row; this costs one assig
 - The empty list distinguishes three emptinesses: scoped-and-empty (names the folder),
   unscoped-with-rows-behind-it, and **nothing at all** — which on a fresh machine is a first
   launch, not a failure, and says so.
+- **No folder chosen shows only `RECENT`, not the live groups.** Before a window is pointed
+  anywhere, `WAITING`/`RUNNING`/`IDLE` would be *every* agent on the machine — noise when the
+  point of that empty state is picking somewhere to start, and the opposite of what `#dir`'s own
+  folder-switch panel (below) is trying to offer as a short, calm list. `render()`'s `noFolder`
+  branch (`!windowDir`) suppresses the three live groups and leaves `RECENT` (session history)
+  as the only thing rendered — same underlying data the folder-switch panel reads. This is
+  distinct from the `projectOnly`-off case (`#filter` toggled to show every project while a
+  folder *is* chosen), which still shows everything on purpose — that one is the deliberate
+  cross-project mesh view goal 1 exists for; `noFolder` is just "nothing to scope to yet."
 - Each tab owns a real pty running its own `claude` — tabs are not one TUI switched with `/resume`. That's what makes them independently interruptible and closable.
 - Click a row → if it's already bound to an open tab, focus that tab; if the session is **dead**, open a new tab running `claude --resume <sessionId>` in its own cwd. Live sessions this window doesn't host are never resumed — they fork, see below.
 - Groups are `WAITING` / `RUNNING` / `IDLE` / `RECENT`, one per registry status, ordered by what they want from you. The old single `LIVE` bucket answered three questions at once. `WAITING` carries the amber status color on its header; unknown registry statuses fall into `RUNNING` (`statusOf` treats anything that isn't `idle`/`waiting` as working). Hosted tabs with no session row sit at the top of `RUNNING`.
@@ -338,11 +351,34 @@ were dropped because they cost a full repaint of every row; this costs one assig
     where the *app* was launched — `/` for a Finder or Dock launch, which is every packaged
     launch — so it was meaningless and is gone. `process.cwd()` is not a default for anything
     any more; `spawnTab` falls back to `os.homedir()`.
-  - Third state: toggle armed with **no folder chosen**. Filtering on nothing would empty the list
-    next to the welcome pane, which is a dead end, so it shows everything and `#filter` dims
-    (`.empty`) instead of lighting up.
+  - Third state: toggle armed with **no folder chosen**. `#filter` dims (`.empty`) instead of
+    lighting up — it's still "on" in the sense that it'll scope the moment a folder exists, but
+    there's nothing to scope to yet. The list itself falls to the `noFolder` case above (`RECENT`
+    only), not to showing everything.
   - `#filter` is a glyph, not a word: the folder it scopes to is named by `#dir` immediately to its
     left, so the toggle never has to repeat it.
+
+### Folder switcher (`#dir` click)
+
+Clicking `#dir` no longer opens the native OS dialog directly — it swaps the sidebar body (the
+session list, `#new-agent`, `#warnings`, `#usage`) for `#dir-switch-panel`, in place, without
+moving `#dir` itself: the button stays exactly where it is in `#sidebar-header`, and a close (✕)
+button (`#dir-back`) appears in the same header row to its left. This is the same header-swap
+technique the traffic-light inset already relies on — one fixed chrome strip, different content
+underneath.
+
+- `#dir-switch-panel` lists the same "every folder that ever held a session" data `#recent-dirs`
+  used to (the welcome pane's own copy of that list was removed as a straight duplicate once this
+  existed — one place to pick a folder, not two that could drift).
+- **`Browse…`** is the escape hatch to the native picker (`window.meshAPI.pickDirectory()`) for
+  anywhere not already in that history — the panel doesn't replace the OS dialog, it just makes
+  the common case (a folder you've already worked in) one click instead of a full Finder
+  round-trip.
+- Picking an entry or `Browse…` calls `setWindowDir` + closes the panel + `render()`s; `#dir-back`
+  closes it with no change, same as picking nothing used to.
+- **Path is hover-only** (`.recent-dir .path { opacity: 0 }`, `:hover { opacity: 1 }`). The name
+  alone identifies a folder you've already worked in; the full path is there for the case where
+  two projects share a name, not as a thing to read on every row every time.
 
 ## Forks are not duplicates
 
@@ -544,7 +580,7 @@ Two things that are true because of how this was built, and stay true:
 - The sidebar resizer is a 6px absolutely-positioned strip straddling the sidebar's right edge (`right: -3px`). It **must** carry `-webkit-app-region: no-drag`, otherwise dragging it drags the whole window instead.
 - While dragging, `body.resizing` sets `pointer-events: none` on the terminal pane so the pointer can't get swallowed by the xterm canvas mid-drag.
 - Terminals refit **at drop**, not per `mousemove` — a `term.resize()` per mouse event thrashes xterm's renderer and the pty.
-- Width clamps to 180–520px, persists in `localStorage` under `sidebarWidth`, double-click resets to 248.
+- Width clamps to 180–520px, persists in `localStorage` under `sidebarWidth`, double-click resets to 372.
 
 ## Theme — One Dark Pro Glass
 Colors were copied from the **One Dark Pro Max** Zed extension's `one-dark-pro-glass` theme

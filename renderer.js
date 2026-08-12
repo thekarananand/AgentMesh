@@ -197,7 +197,7 @@ window.addEventListener('resize', fitAll);
 // Nothing in this layout is ever meant to scroll horizontally, and vertically only two
 // things are: the sidebar list and xterm's own viewport. So snap anything else back to
 // the origin as it happens. Capture phase, because these scrolls don't bubble.
-const SCROLLERS = '#list, #recent-dirs, .xterm-viewport';
+const SCROLLERS = '#list, #dir-switch-panel, .xterm-viewport';
 document.addEventListener(
   'scroll',
   (e) => {
@@ -425,23 +425,74 @@ function syncDirButton() {
 }
 
 // Changing the folder changes what the window is looking at. It does not start anything —
-// that is what the button underneath is for.
-dirEl.addEventListener('click', async () => {
+// that is what the button underneath is for. Clicking #dir doesn't go straight to the
+// native dialog any more — it swaps the sidebar body for a folder-switch panel (recent
+// folders, one tap each) and leaves the native picker as the "Browse…" escape hatch for
+// anywhere not already in that list.
+const dirBackEl = document.getElementById('dir-back');
+const dirSwitchPanelEl = document.getElementById('dir-switch-panel');
+const dirSwitchListEl = document.getElementById('dir-switch-list');
+const dirSwitchBrowseEl = document.getElementById('dir-switch-browse');
+
+function setDirSwitching(on) {
+  sidebarEl.classList.toggle('switching', on);
+  if (on) renderDirSwitchList();
+}
+
+dirEl.addEventListener('click', () => setDirSwitching(true));
+dirBackEl.addEventListener('click', () => setDirSwitching(false));
+
+dirSwitchBrowseEl.addEventListener('click', async () => {
   const picked = await window.meshAPI.pickDirectory();
   if (!picked) return;
   setWindowDir(picked);
+  setDirSwitching(false);
   render(); // the list is scoped to this
 });
+
+// Every folder that has ever held a session is already in the sidebar's data, so the
+// switcher gets a shortcut list for free — no separate history to keep in sync.
+function renderDirSwitchList() {
+  const seen = new Set();
+  const dirs = [];
+  for (const row of rows) {
+    if (!row.cwd || seen.has(row.cwd)) continue;
+    seen.add(row.cwd);
+    dirs.push(row.cwd);
+    if (dirs.length >= 12) break;
+  }
+
+  dirSwitchListEl.replaceChildren();
+  if (!dirs.length) {
+    dirSwitchListEl.appendChild(el('div', 'recent-label', 'NO RECENT FOLDERS'));
+    return;
+  }
+
+  for (const dir of dirs) {
+    const node = el('button', 'recent-dir');
+    node.type = 'button';
+    const icon = el('span', 'icon');
+    icon.innerHTML = FOLDER_SVG;
+    node.appendChild(icon);
+    node.appendChild(el('span', 'name', baseName(dir)));
+    node.appendChild(el('span', 'path', dir));
+    node.title = dir;
+    node.addEventListener('click', () => {
+      setWindowDir(dir);
+      setDirSwitching(false);
+      render();
+    });
+    dirSwitchListEl.appendChild(node);
+  }
+}
 
 // ------------------------------------------------------------------ welcome pane
 
 const welcomeEl = document.getElementById('welcome');
 const pickDirEl = document.getElementById('pick-dir');
-const recentDirsEl = document.getElementById('recent-dirs');
 
 function showWelcome(on) {
   welcomeEl.classList.toggle('hidden', !on);
-  if (on) renderRecentDirs();
   syncNewAgentButton();
 }
 
@@ -504,36 +555,6 @@ async function newSessionHere(dir) {
 pickDirEl.addEventListener('click', () => newSessionHere());
 // The one action that starts something, in the folder the header names.
 newAgentEl.addEventListener('click', () => newSessionHere(windowDir));
-
-// Every folder that has ever held a session is already in the sidebar's data, so the
-// picker gets a shortcut list for free — no separate history to keep in sync.
-function renderRecentDirs() {
-  const seen = new Set();
-  const dirs = [];
-  for (const row of rows) {
-    if (!row.cwd || seen.has(row.cwd)) continue;
-    seen.add(row.cwd);
-    dirs.push(row.cwd);
-    if (dirs.length >= 8) break;
-  }
-
-  recentDirsEl.replaceChildren();
-  if (!dirs.length) return;
-
-  recentDirsEl.appendChild(el('div', 'recent-label', 'RECENT FOLDERS'));
-  for (const dir of dirs) {
-    const node = el('button', 'recent-dir');
-    node.type = 'button';
-    const icon = el('span', 'icon');
-    icon.innerHTML = FOLDER_SVG;
-    node.appendChild(icon);
-    node.appendChild(el('span', 'name', baseName(dir)));
-    node.appendChild(el('span', 'path', dir));
-    node.title = dir;
-    node.addEventListener('click', () => newSessionHere(dir));
-    recentDirsEl.appendChild(node);
-  }
-}
 
 window.ptyAPI.onData((tabId, data) => {
   tabs.get(tabId)?.term.write(data);
@@ -654,7 +675,7 @@ const resizerEl = document.getElementById('sidebar-resizer');
 
 const MIN_SIDEBAR = 180;
 const MAX_SIDEBAR = 520;
-const DEFAULT_SIDEBAR = 248;
+const DEFAULT_SIDEBAR = 372; // 1.5x the original 248
 // Widths worth landing on exactly. A flick that would come to rest near one of these
 // gets pulled onto it; anything else keeps whatever width the drag ended at.
 const SNAP_POINTS = [MIN_SIDEBAR, DEFAULT_SIDEBAR, MAX_SIDEBAR];
@@ -1519,7 +1540,6 @@ function render() {
   const visible = scopedDir ? rows.filter((r) => r.cwd === scopedDir) : rows;
   syncFilterChip();
   syncTabs(visible);
-  if (!welcomeEl.classList.contains('hidden')) renderRecentDirs();
 
   // Sessions that have fallen off the list keep no node, no remembered status and no
   // spent landing pulse — otherwise all three grow for the life of the process.
@@ -1542,16 +1562,27 @@ function render() {
   const hidden = scopedDir ? rows.length - visible.length : 0;
   if (hidden > 0) moreEl._update(hidden);
 
-  if (!visible.length && !orphanTabs.length) {
+  const waiting = visible.filter((r) => statusOf(r) === 'waiting');
+  const running = visible.filter((r) => statusOf(r) === 'busy');
+  const idle = visible.filter((r) => statusOf(r) === 'idle');
+  const past = visible.filter((r) => !r.live);
+
+  // With no folder chosen at all, the live groups would be every agent running anywhere
+  // on the machine — noise when the point of the empty state is picking somewhere to
+  // start. Recent history still shows: it's the same list the folder-switch panel offers.
+  const noFolder = !windowDir;
+  const nothingToShow = noFolder ? !past.length : !visible.length && !orphanTabs.length;
+
+  if (nothingToShow) {
     // An empty scoped list is a dead end unless it says what it's empty *of*, and
     // offers the list that isn't.
-    // Three different emptinesses, and they mean different things. A scoped list is hiding
-    // sessions that exist. An unscoped list with nothing behind it on a machine that has
-    // never run the CLI is a first launch, not a failure — the sidebar is a view onto
-    // Claude Code's own state, so before there is any state there is nothing to show.
+    // Different emptinesses mean different things. A scoped list is hiding sessions
+    // that exist. An unscoped list with nothing behind it on a machine that has never
+    // run the CLI is a first launch, not a failure — the sidebar is a view onto Claude
+    // Code's own state, so before there is any state there is nothing to show.
     emptyEl.textContent = scopedDir
       ? `No sessions in ${baseName(scopedDir)}.`
-      : rows.length
+      : rows.length && !noFolder
         ? 'No sessions found.'
         : 'No Claude Code sessions yet — start one and it shows up here.';
     syncChildren(listEl, hidden > 0 ? [emptyEl, moreEl] : [emptyEl]);
@@ -1559,23 +1590,19 @@ function render() {
     return;
   }
 
-  const waiting = visible.filter((r) => statusOf(r) === 'waiting');
-  const running = visible.filter((r) => statusOf(r) === 'busy');
-  const idle = visible.filter((r) => statusOf(r) === 'idle');
-  const past = visible.filter((r) => !r.live);
   const desired = [];
 
-  if (waiting.length) {
+  if (waiting.length && !noFolder) {
     waitingGroupEl._update(waiting.length);
     desired.push(waitingGroupEl, ...nest(waiting));
   }
   // A tab we host but no row accounts for is running by definition — this window is
   // looking at it — so it sits with RUNNING rather than earning a group of its own.
-  if (running.length || orphanTabs.length) {
+  if ((running.length || orphanTabs.length) && !noFolder) {
     runningGroupEl._update(running.length + orphanTabs.length);
     desired.push(runningGroupEl, ...orphanTabs, ...nest(running));
   }
-  if (idle.length) {
+  if (idle.length && !noFolder) {
     idleGroupEl._update(idle.length);
     desired.push(idleGroupEl, ...nest(idle));
   }
