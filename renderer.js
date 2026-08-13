@@ -215,9 +215,12 @@ function setActive(tabId) {
   activeTabId = tabId;
   for (const [id, tab] of tabs) tab.host.classList.toggle('hidden', id !== tabId);
   showWelcome(false);
-  // Switching to a session in another repo is moving the window there — the header and
-  // the scoped list follow, or the tab you just opened could be filtered out of the list.
-  setWindowDir(tabs.get(tabId).cwd || windowDir);
+  // Focusing a tab is looking at it, not moving the window there — the header stays
+  // put so `New session` keeps launching wherever the user last pointed it, even while
+  // looking at an agent running somewhere else. The one exception is unset: with no
+  // folder chosen yet there is nothing to overwrite, so the first tab you look at seeds
+  // it instead of leaving the header stuck on "Choose folder" forever.
+  if (!windowDir) setWindowDir(tabs.get(tabId).cwd || null);
   syncNewAgentButton();
   render(); // the sidebar carries a card per hosted tab, so which one is active shows there
   tabs.get(tabId).term.focus();
@@ -387,10 +390,12 @@ function createTerminal(opts) {
 // --------------------------------------------------------------- the window's folder
 //
 // One piece of state answering "where is this window pointed": it names what `New session`
-// starts, and what the list is scoped to. It follows the active tab, because switching to
-// a session in another repo *is* moving the window there — but it also stands on its own
-// with no tabs open, which is what makes the header control a folder switcher rather than
-// a disguised session launcher.
+// starts, and what the list is scoped to. It changes only when the user says so — the
+// folder-switch panel, Browse…, or the welcome pane's picker — never as a side effect of
+// looking at some other agent's tab. Otherwise focusing a session in another repo would
+// silently retarget the next `New session` click at that repo instead. It also stands on
+// its own with no tabs open, which is what makes the header control a folder switcher
+// rather than a disguised session launcher.
 
 const dirEl = document.getElementById('dir');
 const dirNameEl = dirEl.querySelector('.dir-name');
@@ -948,13 +953,14 @@ function relTime(ms) {
 // Where the session is and when it last moved. Not its pid, not its age in bytes, and
 // not the prompt count — that was bookkeeping nobody scans a sidebar for. The project
 // drops out while the list is scoped to one folder, where every row would repeat the same
-// word — `scopedDir`, not `projectOnly`, because the toggle can be on with nothing to
-// scope to and those rows do still span projects.
+// word — compared against the row's own cwd, not just whether scoping is on, because a
+// hosted tab from another folder can still be visible under scope (see render) and that
+// row needs its project name precisely because it doesn't match the rest of the list.
 function renderMeta(node, row) {
   const parts = [];
   if (row.live && row.kind === 'bg') parts.push('background');
   if (row.promptCount) parts.push(`${row.promptCount} prompt${row.promptCount === 1 ? '' : 's'}`);
-  if (row.project && !scopedDir) parts.push(row.project);
+  if (row.project && row.cwd !== scopedDir) parts.push(row.project);
   if (row.gitBranch && row.gitBranch !== 'HEAD') parts.push(row.gitBranch);
   const when = relTime(row.updatedAt);
   if (when) parts.push(when);
@@ -1537,7 +1543,13 @@ function render() {
   // No folder chosen means nothing to scope to, and an empty list would be a dead end —
   // the welcome pane is where you go to start something, so it shows everything.
   scopedDir = projectOnly ? windowDir : null;
-  const visible = scopedDir ? rows.filter((r) => r.cwd === scopedDir) : rows;
+  // A tab this window hosts is never scope-filtered out, even when its folder isn't the
+  // scoped one — the header no longer follows the active tab (see setActive), so looking
+  // at an agent running elsewhere must not make its own card, close button and rename
+  // disappear out from under it.
+  const visible = scopedDir
+    ? rows.filter((r) => r.cwd === scopedDir || (r.tabId && tabs.has(r.tabId)))
+    : rows;
   syncFilterChip();
   syncTabs(visible);
 

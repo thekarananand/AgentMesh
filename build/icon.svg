@@ -226,16 +226,20 @@
   <!-- Highlight glow (bottom area) -->
   <!-- Activity indicators (status dots) -->
   <rect
-     width="1024"
-     height="1024"
+     width="824"
+     height="824"
      class="bg"
-     rx="200"
-     ry="200"
+     rx="185.4"
+     ry="185.4"
      id="rect2-5"
-     x="0"
-     y="0"
+     x="100"
+     y="100"
      style="fill:#1b1e24"
      inkscape:label="Background" />
+  <g
+     id="icon-content"
+     transform="translate(100,100) scale(0.8046875)"
+     inkscape:label="Mark, scaled to the 824/1024 macOS icon safe area">
   <g
      id="g214"
      style="display:inline;stroke:url(#linearGradient230);stroke-width:14.2;stroke-dasharray:none;stroke-opacity:1"
@@ -318,4 +322,5 @@
      style="fill:none;fill-opacity:1;stroke:#4d8cfe;stroke-width:3.8;stroke-dasharray:none;stroke-opacity:1"
      d="m 511.99702,626.84299 0.003,-114.843"
      id="path239" />
+  </g>
 </svg>

@@ -16,6 +16,15 @@ let win;
 let unwatch;
 let unpollUsage;
 
+// A GUI launch (Finder/Dock) doesn't source the login shell's rc files the way a
+// terminal-launched process does, so LANG/LC_ALL commonly arrive unset here even when
+// a real terminal on the same machine has them. That leaves Electron's own process —
+// and everything it spawns, node-pty included — running under the POSIX "C" locale,
+// which is ASCII-only. Only filling the gap when unset, so an existing locale is never
+// second-guessed.
+if (!process.env.LANG) process.env.LANG = 'en_US.UTF-8';
+if (!process.env.LC_ALL) process.env.LC_ALL = 'en_US.UTF-8';
+
 const ptys = new Map(); // tabId -> node-pty process
 
 // Strip Claude Code's own session env — if AgentMesh itself was launched from inside

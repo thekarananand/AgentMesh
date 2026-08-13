@@ -333,14 +333,24 @@ were dropped because they cost a full repaint of every row; this costs one assig
 - Click a row → if it's already bound to an open tab, focus that tab; if the session is **dead**, open a new tab running `claude --resume <sessionId>` in its own cwd. Live sessions this window doesn't host are never resumed — they fork, see below.
 - Groups are `WAITING` / `RUNNING` / `IDLE` / `RECENT`, one per registry status, ordered by what they want from you. The old single `LIVE` bucket answered three questions at once. `WAITING` carries the amber status color on its header; unknown registry statuses fall into `RUNNING` (`statusOf` treats anything that isn't `idle`/`waiting` as working). Hosted tabs with no session row sit at the top of `RUNNING`.
 - **Every hosted tab gets a card**, including ones no session row accounts for: a `claude agents` FleetView (hosts no sessionId of its own) and sessions too young to have registered. Before that, `.row-close` was gated on `.row.open`, which is `tabId && tabs.has(tabId)` — and `tabId` comes from walking the pid parent chain (`tabForPid`, main.js), which a daemon-owned bg agent never satisfies. Result: tabs that existed with no card and no way to close them.
-- Card subtitle is `background · project · branch · <relative time>`. Not prompt count (bookkeeping), not pid or byte size (those live in the hover tooltip). `project` is dropped while the list is scoped to one folder, where every row would repeat the same word — keyed on `scopedDir`, not `projectOnly`, because the toggle can be armed with no folder to scope to.
+- Card subtitle is `background · project · branch · <relative time>`. Not prompt count (bookkeeping), not pid or byte size (those live in the hover tooltip). `project` is dropped when the row's own cwd matches `scopedDir` — not just whenever scoping is on — because a hosted tab from another folder can still be visible under scope (see below) and needs its project name precisely because it's the one row that doesn't match the rest of the list.
 - **`windowDir` is where the window is pointed** — one piece of renderer state answering that
   question, persisted in `localStorage`. It names what `#new-agent` starts and what the list is
   scoped to. Each window answers "what's running on what I'm looking at" first and acts as a
   machine-wide mesh view second, so `projectOnly` also starts **on** and persists.
-  - It **follows the active tab**: `setActive` calls `setWindowDir(tab.cwd)`, because switching to
-    a session in another repo *is* moving the window there — and without it the tab you just
-    opened could be filtered out of the list showing it.
+  - It changes **only when the user says so** — the folder-switch panel, `Browse…`, or the
+    welcome pane's picker — never as a side effect of focusing some other agent's tab.
+    `setActive` used to call `setWindowDir(tab.cwd)` on every focus, so looking at an agent
+    running in another repo silently retargeted the next `New session` click at that repo
+    too. The one exception is unset: with no folder chosen yet there's nothing to overwrite,
+    so the first tab focused after launch seeds it rather than leaving the header stuck on
+    "Choose folder" forever.
+  - Because the header no longer follows the active tab, a hosted row can end up outside
+    the current scope (focus a session in a different folder while `#filter` is armed
+    elsewhere). `render()`'s scope filter exempts any row bound to a tab this window hosts
+    (`r.tabId && tabs.has(r.tabId)`) so its card, close button and rename never disappear —
+    the same "every hosted tab gets a card" principle above, extended to rows the scope
+    would otherwise hide.
   - It also stands alone with no tabs, which is the whole point: `#dir` re-points the window
     without spawning anything.
   - It is **validated on load**, not trusted: the stored value is a raw absolute path from some
