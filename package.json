@@ -35,7 +35,8 @@
   },
   "dependencies": {
     "node-pty": "^1.1.0",
-    "xterm": "^5.3.0"
+    "xterm": "^5.3.0",
+    "xterm-addon-canvas": "^0.5.0"
   },
   "build": {
     "appId": "dev.agentmesh.app",
@@ -59,6 +60,7 @@
       "assets/**/*",
       "node_modules/xterm/lib/xterm.js",
       "node_modules/xterm/css/xterm.css",
+      "node_modules/xterm-addon-canvas/lib/xterm-addon-canvas.js",
       "node_modules/node-pty/**/*"
     ],
     "asarUnpack": [

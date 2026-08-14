@@ -1,29 +1,130 @@
-const THEME = {
+const BASE_THEME = {
   background: '#08090900',
   foreground: '#abb2bf',
   cursor: '#abb2bf',
-  cursorAccent: '#080909',
-  selectionBackground: '#4aa5f040',
-  black: '#3f4451',
-  brightBlack: '#4f5666',
-  red: '#e05561',
-  brightRed: '#ff616e',
-  green: '#8cc265',
-  brightGreen: '#a5e075',
-  yellow: '#d18f52',
-  brightYellow: '#f0a45d',
-  blue: '#4aa5f0',
-  brightBlue: '#4dc4ff',
-  magenta: '#c162de',
-  brightMagenta: '#de73ff',
-  cyan: '#42b3c2',
-  brightCyan: '#4cd1e0',
-  white: '#d7dae0',
-  brightWhite: '#e6e6e6',
+  cursorAccent: '#282c34',
+  selectionBackground: '#3b3f4a80',
+  black: '#282c34',
+  brightBlack: '#636d83',
+  red: '#e06c75',
+  brightRed: '#ea858b',
+  green: '#98c379',
+  brightGreen: '#aad581',
+  yellow: '#e5c07b',
+  brightYellow: '#ffd885',
+  blue: '#61afef',
+  brightBlue: '#85c1ff',
+  magenta: '#c678dd',
+  brightMagenta: '#d398eb',
+  cyan: '#56b6c2',
+  brightCyan: '#6ed5de',
+  white: '#abb2bf',
+  brightWhite: '#fafafa',
 };
 
+// Ported from Zed's `terminal.minimum_contrast` (default 45, APCA 0-106 scale): rather than
+// trusting fixed hex to hold up, each text-role color is nudged lighter until it clears an
+// APCA contrast threshold against the background. Real background is the vibrancy blur, which
+// can't be measured from here, so #0f1116 (the app's own no-vibrancy fallback, see
+// `body.no-vibrancy`) stands in as the realistic worst case. `black`/`brightBlack` are left
+// alone — they're deliberately background-adjacent, and Zed has the same known gap
+// (zed-industries/zed#33253) rather than a fix worth reproducing.
+const CONTRAST_BG = '#0f1116';
+const MINIMUM_CONTRAST = 45;
+
+function hexToRgb(hex) {
+  const n = parseInt(hex.slice(1, 7), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+function rgbToHex([r, g, b]) {
+  return '#' + [r, g, b].map((c) => Math.round(Math.min(255, Math.max(0, c))).toString(16).padStart(2, '0')).join('');
+}
+
+function relativeLuminance([r, g, b]) {
+  const lin = [r, g, b].map((c) => {
+    const s = c / 255;
+    return s <= 0.04045 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+  });
+  return 0.2126729 * lin[0] + 0.7151522 * lin[1] + 0.072175 * lin[2];
+}
+
+// APCA 0.98G — same core constants as the reference implementation Zed's own check is built on.
+function apcaContrast(yText, yBg) {
+  const blkThrs = 0.022, blkClmp = 1.414, loClip = 0.1, deltaYmin = 0.0005;
+  const normBG = 0.56, normTXT = 0.57, revBG = 0.65, revTXT = 0.62;
+  const scaleBoW = 1.14, scaleWoB = 1.14, loBoWoffset = 0.027, loWoBoffset = 0.027;
+  const t = yText > blkThrs ? yText : yText + Math.pow(blkThrs - yText, blkClmp);
+  const b = yBg > blkThrs ? yBg : yBg + Math.pow(blkThrs - yBg, blkClmp);
+  if (Math.abs(b - t) < deltaYmin) return 0;
+  let out;
+  if (b > t) {
+    const sapc = (Math.pow(b, normBG) - Math.pow(t, normTXT)) * scaleBoW;
+    out = sapc < loClip ? 0 : sapc - loBoWoffset;
+  } else {
+    const sapc = (Math.pow(b, revBG) - Math.pow(t, revTXT)) * scaleWoB;
+    out = sapc > -loClip ? 0 : sapc + loWoBoffset;
+  }
+  return out * 100;
+}
+
+function rgbToHsl([r, g, b]) {
+  r /= 255; g /= 255; b /= 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  let h, s;
+  const l = (max + min) / 2;
+  if (max === min) { h = s = 0; } else {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    switch (max) {
+      case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+      case g: h = (b - r) / d + 2; break;
+      default: h = (r - g) / d + 4;
+    }
+    h /= 6;
+  }
+  return [h, s, l];
+}
+
+function hslToRgb([h, s, l]) {
+  if (s === 0) { const v = l * 255; return [v, v, v]; }
+  const hue2rgb = (p, q, t) => {
+    if (t < 0) t += 1;
+    if (t > 1) t -= 1;
+    if (t < 1 / 6) return p + (q - p) * 6 * t;
+    if (t < 1 / 2) return q;
+    if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+    return p;
+  };
+  const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+  const p = 2 * l - q;
+  return [hue2rgb(p, q, h + 1 / 3) * 255, hue2rgb(p, q, h) * 255, hue2rgb(p, q, h - 1 / 3) * 255];
+}
+
+function ensureContrast(hex, bgHex = CONTRAST_BG, minContrast = MINIMUM_CONTRAST) {
+  const bgY = relativeLuminance(hexToRgb(bgHex));
+  let rgb = hexToRgb(hex);
+  if (Math.abs(apcaContrast(relativeLuminance(rgb), bgY)) >= minContrast) return hex;
+  const lighten = bgY < 0.5;
+  let [h, s, l] = rgbToHsl(rgb);
+  for (let i = 0; i < 40 && l > 0 && l < 1; i++) {
+    l = lighten ? Math.min(1, l + 0.02) : Math.max(0, l - 0.02);
+    rgb = hslToRgb([h, s, l]);
+    if (Math.abs(apcaContrast(relativeLuminance(rgb), bgY)) >= minContrast) break;
+  }
+  return rgbToHex(rgb);
+}
+
+const CONTRAST_CORRECTED_KEYS = [
+  'foreground', 'red', 'brightRed', 'green', 'brightGreen', 'yellow', 'brightYellow',
+  'blue', 'brightBlue', 'magenta', 'brightMagenta', 'cyan', 'brightCyan', 'white', 'brightWhite',
+];
+
+const THEME = { ...BASE_THEME };
+for (const key of CONTRAST_CORRECTED_KEYS) THEME[key] = ensureContrast(BASE_THEME[key]);
+
 const FONT_FAMILY = '"JetBrainsMono Nerd Font Mono", monospace';
-const FONT_SIZE = 13;
+const FONT_SIZE = 15;
 
 // Canvas metrics, not DOM layout — this has to resolve before the first term.open(),
 // since xterm sizes itself against the container box at open time.
@@ -271,8 +372,21 @@ function createTerminal(opts) {
     lineHeight: 1,
     letterSpacing: 0,
     theme: THEME,
+    // Must be set before term.open() and requires it, per xterm's own docs — the canvas addon
+    // otherwise creates its 2d context with alpha:false and paints an opaque backing every
+    // frame, which would flatten the vibrancy blur behind the terminal (see the "real OS blur"
+    // notes in CLAUDE.md: a mostly-opaque layer is exactly what defeats it).
+    allowTransparency: true,
+    // Procedural box-drawing/block-element glyphs instead of the font's own, which tile with
+    // visible seams at lineHeight 1 — this is what made the CLI's own block-glyph splash
+    // screen look torn up. `customGlyphs` is a no-op without a canvas/WebGL renderer: the
+    // bundled `xterm` core package ships only DomRenderer, which always uses the font's own
+    // glyphs regardless of this option. `xterm-addon-canvas` below is what actually makes it do
+    // anything.
+    customGlyphs: true,
   });
   term.open(host);
+  term.loadAddon(new CanvasAddon.CanvasAddon());
 
   window.ptyAPI.create(opts).then((tabId) => {
     // The fork's own session id doesn't exist yet — it registers seconds later. Hold the
