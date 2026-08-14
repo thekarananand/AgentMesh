@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 const { HEADER_HEIGHT } = require('./titlebar');
 const platform = require('./platform');
 
@@ -33,6 +33,10 @@ contextBridge.exposeInMainWorld('meshAPI', {
   // Which Claude Code binary every tab will run, and whether there is one at all.
   dirExists: (dir) => ipcRenderer.invoke('fs:dir-exists', dir),
   findFiles: (filenames) => ipcRenderer.invoke('fs:find-files', filenames),
+
+  // `File.path` was removed from the DOM File object (superseded by this call) — dropped
+  // files and folders alike only carry a real fs path through webUtils now.
+  getPathForFile: (file) => webUtils.getPathForFile(file),
 
   claudeInfo: () => ipcRenderer.invoke('claude:info'),
   onClaudeInfo: (callback) => ipcRenderer.on('claude-info', (event, info) => callback(info)),

@@ -439,13 +439,13 @@ function createTerminal(opts) {
 
       let paths = [];
 
-      // Try first: get file paths from file objects (Electron-specific)
+      // Try first: get file paths from file objects (Electron-specific). `File.path` is gone
+      // as of modern Electron (superseded by webUtils.getPathForFile) — without this, both
+      // files and folders fall back to bare names, and only the shallow findFiles search
+      // below stands a chance of recovering a path.
       if (e.dataTransfer.files.length) {
         paths = Array.from(e.dataTransfer.files).map((file) => {
-          // Electron File objects from OS drag-and-drop have a `path` property
-          let filePath = file.path || file.name;
-          console.log('File drag data:', { name: file.name, path: file.path, filePath });
-          return filePath;
+          return window.meshAPI.getPathForFile(file) || file.name;
         });
       }
 
