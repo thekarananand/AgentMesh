@@ -11,6 +11,7 @@
     "fonts": "node tools/build-fonts.js",
     "icon": "node tools/make-icon.js",
     "dist": "electron-builder",
+    "dist:mac:arm64": "electron-builder --mac --arm64",
     "dist:mac": "electron-builder --mac",
     "dist:linux": "electron-builder --linux",
     "dist:win": "electron-builder --win",
