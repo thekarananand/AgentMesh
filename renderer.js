@@ -894,9 +894,13 @@ const SPINNER_SVG =
   '<circle cx="8" cy="8" r="7" stroke="currentColor" stroke-opacity="0.25" stroke-width="2"/>' +
   '<path d="M15 8a7.002 7.002 0 0 0-7-7" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>' +
   '</svg>';
+// JetBrains Icons (dark), chevron_right.svg path geometry — see assets/icons/jetbrains-icons.
+// Drives the RECENT group's collapse toggle (.chev), which inherits `color` from
+// `.group.collapsible:hover`, so this stays currentColor rather than the theme's own
+// hardcoded stroke — unlike the folder glyphs below, which are static and keep their own color.
 const CHEVRON_SVG =
-  '<svg viewBox="0 0 16 16" aria-hidden="true">' +
-  '<path d="M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06-1.06L9.94 8 6.22 4.28a.75.75 0 0 1 0-1.06Z"/>' +
+  '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true">' +
+  '<path d="M6 11.5L9.5 8L6 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>' +
   '</svg>';
 const X_SVG =
   '<svg viewBox="0 0 16 16" aria-hidden="true">' +
@@ -907,9 +911,13 @@ const FORK_SVG =
   '<svg viewBox="0 0 16 16" aria-hidden="true">' +
   '<path d="M9.5 3.25a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.878A2.49 2.49 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25Zm-6 0a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0Zm8.25-.75a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5ZM4.25 12a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Z"/>' +
   '</svg>';
+// JetBrains Icons (dark), folder.svg — verbatim colors (static glyph, no hover/state
+// transition on any of its usages, so unlike CHEVRON_SVG above it keeps the theme's own
+// fill/stroke rather than currentColor). Copyright 2000-2022 JetBrains s.r.o. and
+// contributors, Apache 2.0 — see assets/icons/jetbrains-icons/LICENSE-Apache-2.0.txt.
 const FOLDER_SVG =
-  '<svg viewBox="0 0 16 16" aria-hidden="true">' +
-  '<path d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5a.25.25 0 0 1-.2-.1l-.9-1.2C6.07 1.26 5.55 1 5 1H1.75Z"/>' +
+  '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true">' +
+  '<path d="M8.10584 4.34613L8.25344 4.5H8.46667H13C13.8284 4.5 14.5 5.17157 14.5 6V12.1333C14.5 12.9529 13.932 13.5 13.3667 13.5H2.63333C2.06804 13.5 1.5 12.9529 1.5 12.1333V3.86667C1.5 3.04707 2.06804 2.5 2.63333 2.5H6.1217C6.25792 2.5 6.38824 2.55557 6.48253 2.65387L8.10584 4.34613Z" fill="#43454A" stroke="#CED0D6"/>' +
   '</svg>';
 
 // ------------------------------------------------------------- status glyphs

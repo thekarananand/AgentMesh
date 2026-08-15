@@ -94,6 +94,13 @@ not the goal itself; a CLI gap is worth closing when it serves one of the three 
   (no separate source of truth; regenerate by hand from `icon.svg` if the mark changes). Used on
   the welcome pane, where it sits on the app's own dark chrome rather than the icon's rounded
   dark-square tile.
+- `assets/icons/jetbrains-icons/` — the JetBrains Icons Zed extension (dark + light + common
+  variants, Apache 2.0, `NOTICE.md` + `LICENSE-Apache-2.0.txt`), copied wholesale for reference
+  and provenance. **Not read at runtime** — the app inlines two glyphs from the `dark` variant
+  (folder, chevron) as literal path strings in `index.html`/`renderer.js`, replacing what used to
+  be Octicon paths for the folder-picker and the RECENT group's collapse toggle. Everything else
+  in the set (the other ~120 file-type icons) is unused; AgentMesh has no file-tree surface for
+  them to attach to.
 - `build/` — packaging inputs: `icon.svg` (source art), `icon.png` (committed, what electron-builder consumes), `entitlements.mac.plist`
 - `tools/` — authoring scripts, never part of a build: `build-fonts.js` (ttf→woff2), `make-icon.js` (svg→png)
 

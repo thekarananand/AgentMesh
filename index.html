@@ -289,7 +289,7 @@
     #dir-switch-browse { margin-bottom: 4px; border-bottom: 1px solid var(--border-subtle); border-radius: var(--radius) var(--radius) 0 0; padding-bottom: 9px; }
 
     #dir .dir-icon { display: inline-flex; flex: 0 0 auto; color: var(--fg-faint); }
-    #dir .dir-icon svg { width: 13px; height: 13px; fill: currentColor; }
+    #dir .dir-icon svg { width: 18px; height: 18px; fill: currentColor; }
     #dir .dir-name {
       flex: 0 1 auto;
       min-width: 0;
@@ -809,7 +809,7 @@
       box-sizing: border-box;
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 5px;
       padding: 5px 8px;
       border-radius: var(--radius);
       cursor: pointer;
@@ -819,7 +819,7 @@
     .recent-dir:hover { background: var(--overlay-hover); }
     .recent-dir:active { background: var(--overlay-press); transform: scale(0.99); }
     .recent-dir .icon { display: inline-flex; flex: 0 0 auto; color: var(--fg-faint); }
-    .recent-dir .icon svg { width: 13px; height: 13px; fill: currentColor; }
+    .recent-dir .icon svg { width: 18px; height: 18px; fill: currentColor; }
     .recent-dir .name { font-size: 12px; font-weight: 500; color: var(--fg-default); flex: 0 0 auto; }
     /* Full path is clutter until you actually need it — the name alone is enough to
        recognize a folder you've already worked in. Reveal on hover, same box either
@@ -980,12 +980,14 @@
         <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.75.75 0 1 1 1.06 1.06L9.06 8l3.22 3.22a.75.75 0 1 1-1.06 1.06L8 9.06l-3.22 3.22a.75.75 0 0 1-1.06-1.06L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z"/></svg>
       </button>
       <button id="dir" class="unset" type="button" title="Change this window's folder">
+        <!-- JetBrains Icons (dark), folder.svg — see assets/icons/jetbrains-icons -->
         <span class="dir-icon">
-          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5a.25.25 0 0 1-.2-.1l-.9-1.2C6.07 1.26 5.55 1 5 1H1.75Z"/></svg>
+          <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8.10584 4.34613L8.25344 4.5H8.46667H13C13.8284 4.5 14.5 5.17157 14.5 6V12.1333C14.5 12.9529 13.932 13.5 13.3667 13.5H2.63333C2.06804 13.5 1.5 12.9529 1.5 12.1333V3.86667C1.5 3.04707 2.06804 2.5 2.63333 2.5H6.1217C6.25792 2.5 6.38824 2.55557 6.48253 2.65387L8.10584 4.34613Z" fill="#43454A" stroke="#CED0D6"/></svg>
         </span>
         <span class="dir-name">Choose folder</span>
+        <!-- JetBrains Icons (dark), chevron_down.svg — see assets/icons/jetbrains-icons -->
         <span class="dir-chev">
-          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M12.78 6.22a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L3.22 7.28a.751.751 0 0 1 .018-1.042.751.751 0 0 1 1.042-.018L8 9.94l3.72-3.72a.75.75 0 0 1 1.06 0Z"/></svg>
+          <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M11.5 6.25L8 9.75L4.5 6.25" stroke="#B4B8BF" stroke-linecap="round"/></svg>
         </span>
       </button>
       <button id="filter" type="button" aria-pressed="false" title="Toggle: this folder only / every session on this machine">
@@ -994,8 +996,9 @@
     </div>
     <div id="dir-switch-panel">
       <button id="dir-switch-browse" class="recent-dir" type="button">
+        <!-- JetBrains Icons (dark), folder.svg — see assets/icons/jetbrains-icons -->
         <span class="icon">
-          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5a.25.25 0 0 1-.2-.1l-.9-1.2C6.07 1.26 5.55 1 5 1H1.75Z"/></svg>
+          <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8.10584 4.34613L8.25344 4.5H8.46667H13C13.8284 4.5 14.5 5.17157 14.5 6V12.1333C14.5 12.9529 13.932 13.5 13.3667 13.5H2.63333C2.06804 13.5 1.5 12.9529 1.5 12.1333V3.86667C1.5 3.04707 2.06804 2.5 2.63333 2.5H6.1217C6.25792 2.5 6.38824 2.55557 6.48253 2.65387L8.10584 4.34613Z" fill="#43454A" stroke="#CED0D6"/></svg>
         </span>
         <span class="name">Browse…</span>
       </button>
