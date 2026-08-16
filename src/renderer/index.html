@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <title>AgentMesh</title>
-  <link rel="stylesheet" href="node_modules/xterm/css/xterm.css" />
+  <link rel="stylesheet" href="../../node_modules/xterm/css/xterm.css" />
   <style>
     /* ------------------------------------------------------------------- fonts */
 
@@ -19,34 +19,34 @@
        to load before it measures anything, so there is nothing to swap to. */
     @font-face {
       font-family: 'JetBrainsMono Nerd Font Mono';
-      src: url('assets/fonts/JetBrainsMonoNerdFontMono-Regular.woff2') format('woff2');
+      src: url('../../assets/fonts/JetBrainsMonoNerdFontMono-Regular.woff2') format('woff2');
       font-weight: 400; font-style: normal; font-display: block;
     }
     @font-face {
       font-family: 'JetBrainsMono Nerd Font Mono';
-      src: url('assets/fonts/JetBrainsMonoNerdFontMono-Bold.woff2') format('woff2');
+      src: url('../../assets/fonts/JetBrainsMonoNerdFontMono-Bold.woff2') format('woff2');
       font-weight: 700; font-style: normal; font-display: block;
     }
     @font-face {
       font-family: 'JetBrainsMono Nerd Font Mono';
-      src: url('assets/fonts/JetBrainsMonoNerdFontMono-Italic.woff2') format('woff2');
+      src: url('../../assets/fonts/JetBrainsMonoNerdFontMono-Italic.woff2') format('woff2');
       font-weight: 400; font-style: italic; font-display: block;
     }
     @font-face {
       font-family: 'JetBrainsMono Nerd Font Mono';
-      src: url('assets/fonts/JetBrainsMonoNerdFontMono-BoldItalic.woff2') format('woff2');
+      src: url('../../assets/fonts/JetBrainsMonoNerdFontMono-BoldItalic.woff2') format('woff2');
       font-weight: 700; font-style: italic; font-display: block;
     }
 
     /* Inter is variable, so two files cover every weight the chrome uses. */
     @font-face {
       font-family: 'Inter';
-      src: url('assets/fonts/InterVariable.woff2') format('woff2-variations');
+      src: url('../../assets/fonts/InterVariable.woff2') format('woff2-variations');
       font-weight: 100 900; font-style: normal; font-display: swap;
     }
     @font-face {
       font-family: 'Inter';
-      src: url('assets/fonts/InterVariable-Italic.woff2') format('woff2-variations');
+      src: url('../../assets/fonts/InterVariable-Italic.woff2') format('woff2-variations');
       font-weight: 100 900; font-style: italic; font-display: swap;
     }
 
@@ -145,8 +145,8 @@
        gotcha #2) and leaves the glass to the terminal pane only. Premium design
        with refined materials and improved spatial definition. */
     #sidebar {
-      width: 248px;
-      flex: 0 0 248px;
+      width: 372px;
+      flex: 0 0 372px;
       height: 100%;
       box-sizing: border-box;
       position: relative;
@@ -1020,15 +1020,15 @@
   <div id="terminal-pane">
     <div id="tabs-content">
       <div id="welcome">
-        <img id="welcome-logo" src="assets/logo-white.svg" alt="" />
+        <img id="welcome-logo" src="../../assets/logo-white.svg" alt="" />
         <div id="welcome-title">AgentMesh</div>
         <div id="welcome-sub">Pick a folder to start a Claude Code session in.</div>
         <button id="pick-dir">Open folder…</button>
       </div>
     </div>
   </div>
-  <script src="node_modules/xterm/lib/xterm.js"></script>
-  <script src="node_modules/xterm-addon-canvas/lib/xterm-addon-canvas.js"></script>
+  <script src="../../node_modules/xterm/lib/xterm.js"></script>
+  <script src="../../node_modules/xterm-addon-canvas/lib/xterm-addon-canvas.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>

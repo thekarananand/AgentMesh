@@ -4,13 +4,13 @@ const fs = require('fs');
 const os = require('os');
 const crypto = require('crypto');
 const pty = require('node-pty');
-const platform = require('./platform');
-const config = require('./config');
-const claudeCli = require('./claude');
-const sessions = require('./sessions');
-const { rename } = require('./rename');
-const { autoName } = require('./autoname');
-const usage = require('./usage');
+const platform = require('../lib/platform');
+const config = require('../lib/config');
+const claudeCli = require('../lib/claude');
+const sessions = require('../lib/sessions');
+const { rename } = require('../lib/rename');
+const { autoName } = require('../lib/autoname');
+const usage = require('../lib/usage');
 
 let win;
 let unwatch;
@@ -170,13 +170,13 @@ function createWindow() {
     // platform.js for why that is one decision rather than five options.
     ...platform.windowOptions(),
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
+      preload: path.join(__dirname, '../preload/preload.js'),
       contextIsolation: true,
       sandbox: false,
     },
   });
 
-  win.loadFile('index.html');
+  win.loadFile(path.join(__dirname, '../renderer/index.html'));
 
   ipcMain.handle('pty-create', (event, opts) => spawnTab(opts || {}));
 

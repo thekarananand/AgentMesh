@@ -1,6 +1,6 @@
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
-const { HEADER_HEIGHT } = require('./titlebar');
-const platform = require('./platform');
+const { HEADER_HEIGHT } = require('../lib/titlebar');
+const platform = require('../lib/platform');
 
 contextBridge.exposeInMainWorld('ptyAPI', {
   create: (opts) => ipcRenderer.invoke('pty-create', opts),

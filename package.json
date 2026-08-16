@@ -3,10 +3,11 @@
   "productName": "AgentMesh",
   "version": "1.0.0",
   "description": "A control plane for running many Claude Code agents at once — terminals, plus a live view of every session on the machine.",
-  "main": "main.js",
+  "main": "src/main/main.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "electron .",
+    "lint": "eslint .",
     "postinstall": "electron-builder install-app-deps",
     "fonts": "node tools/build-fonts.js",
     "icon": "node tools/make-icon.js",
@@ -24,14 +25,25 @@
     "agents"
   ],
   "author": "Karan Anand",
-  "license": "ISC",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thekarananand/agentmesh.git"
+  },
+  "bugs": {
+    "url": "https://github.com/thekarananand/agentmesh/issues"
+  },
+  "homepage": "https://github.com/thekarananand/agentmesh#readme",
   "type": "commonjs",
   "engines": {
     "node": ">=20"
   },
   "devDependencies": {
+    "@eslint/js": "^9.19.0",
     "electron": "^43.3.0",
     "electron-builder": "^25.1.8",
+    "eslint": "^9.19.0",
+    "globals": "^15.14.0",
     "wawoff2": "^2.0.1"
   },
   "dependencies": {
@@ -46,18 +58,18 @@
       "buildResources": "build"
     },
     "files": [
-      "main.js",
-      "preload.js",
-      "renderer.js",
-      "sessions.js",
-      "rename.js",
-      "autoname.js",
-      "usage.js",
-      "config.js",
-      "claude.js",
-      "platform.js",
-      "titlebar.js",
-      "index.html",
+      "src/main/main.js",
+      "src/preload/preload.js",
+      "src/renderer/renderer.js",
+      "src/renderer/index.html",
+      "src/lib/sessions.js",
+      "src/lib/rename.js",
+      "src/lib/autoname.js",
+      "src/lib/usage.js",
+      "src/lib/config.js",
+      "src/lib/claude.js",
+      "src/lib/platform.js",
+      "src/lib/titlebar.js",
       "assets/**/*",
       "node_modules/xterm/lib/xterm.js",
       "node_modules/xterm/css/xterm.css",

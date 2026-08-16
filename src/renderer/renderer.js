@@ -327,7 +327,6 @@ function setActive(tabId) {
   tabs.get(tabId).term.focus();
 }
 
-
 function closeTab(tabId) {
   const tab = tabs.get(tabId);
   if (!tab) return;
@@ -549,7 +548,6 @@ function syncDirButton() {
 // folders, one tap each) and leaves the native picker as the "Browse…" escape hatch for
 // anywhere not already in that list.
 const dirBackEl = document.getElementById('dir-back');
-const dirSwitchPanelEl = document.getElementById('dir-switch-panel');
 const dirSwitchListEl = document.getElementById('dir-switch-list');
 const dirSwitchBrowseEl = document.getElementById('dir-switch-browse');
 
@@ -883,25 +881,7 @@ let recentOpen = false; // history is noise until asked for; live agents are the
 // ------------------------------------------------------------------- octicons
 //
 // Shipped 16px paths from @primer/octicons, inlined rather than pulled in as a
-// dependency — five glyphs is not a package.
-const DOT_SVG =
-  '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">' +
-  '<path d="M8 4a4 4 0 1 1 0 8 4 4 0 0 1 0-8Z"/>' +
-  '</svg>';
-// Primer's own Spinner markup: a 25%-opacity ring plus a quarter-arc, rotated 1s linear.
-const SPINNER_SVG =
-  '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true">' +
-  '<circle cx="8" cy="8" r="7" stroke="currentColor" stroke-opacity="0.25" stroke-width="2"/>' +
-  '<path d="M15 8a7.002 7.002 0 0 0-7-7" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>' +
-  '</svg>';
-// JetBrains Icons (dark), chevron_right.svg path geometry — see assets/icons/jetbrains-icons.
-// Drives the RECENT group's collapse toggle (.chev), which inherits `color` from
-// `.group.collapsible:hover`, so this stays currentColor rather than the theme's own
-// hardcoded stroke — unlike the folder glyphs below, which are static and keep their own color.
-const CHEVRON_SVG =
-  '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true">' +
-  '<path d="M6 11.5L9.5 8L6 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>' +
-  '</svg>';
+// dependency — two glyphs is not a package.
 const X_SVG =
   '<svg viewBox="0 0 16 16" aria-hidden="true">' +
   '<path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.749.749 0 0 1 1.275.326.749.749 0 0 1-.215.734L9.06 8l3.22 3.22a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215L8 9.06l-3.22 3.22a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z"/>' +
@@ -910,6 +890,14 @@ const X_SVG =
 const FORK_SVG =
   '<svg viewBox="0 0 16 16" aria-hidden="true">' +
   '<path d="M9.5 3.25a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.878A2.49 2.49 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25Zm-6 0a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0Zm8.25-.75a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5ZM4.25 12a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Z"/>' +
+  '</svg>';
+// JetBrains Icons (dark), chevron_right.svg path geometry — see assets/icons/jetbrains-icons.
+// Drives the RECENT group's collapse toggle (.chev), which inherits `color` from
+// `.group.collapsible:hover`, so this stays currentColor rather than the theme's own
+// hardcoded stroke — unlike the folder glyphs below, which are static and keep their own color.
+const CHEVRON_SVG =
+  '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true">' +
+  '<path d="M6 11.5L9.5 8L6 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>' +
   '</svg>';
 // JetBrains Icons (dark), folder.svg — verbatim colors (static glyph, no hover/state
 // transition on any of its usages, so unlike CHEVRON_SVG above it keeps the theme's own
@@ -924,6 +912,28 @@ const FOLDER_SVG =
 //
 // Modelled on GitHub Actions' run status, and it's the same four questions: is it
 // running, is it blocked on me, did it finish, is it over.
+//
+// Drawn in the JetBrains Icons dark-variant language (grid, margins, stroke weight) rather
+// than lifted from the pack itself, which has no running/waiting/idle glyphs of its own —
+// replaces the Primer spinner and Octicons `dot-fill` previously used here. Running and idle
+// share one r=3.5 center dot; the ring wrapped around running's is the only thing that marks
+// it "in progress" rather than "at rest." Waiting gets its own silhouette (two bars) rather
+// than reusing the dot at a different color, so the three states read apart by shape first.
+const RUNNING_SVG =
+  '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true">' +
+  '<circle cx="8" cy="8" r="6" stroke="currentColor" stroke-opacity="0.25" stroke-width="1.5"/>' +
+  '<path d="M14 8a6 6 0 0 0-6-6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>' +
+  '<circle cx="8" cy="8" r="3.5" fill="currentColor"/>' +
+  '</svg>';
+const WAITING_SVG =
+  '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">' +
+  '<rect x="5" y="4.5" width="2" height="7" rx="1"/>' +
+  '<rect x="9" y="4.5" width="2" height="7" rx="1"/>' +
+  '</svg>';
+const IDLE_SVG =
+  '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">' +
+  '<circle cx="8" cy="8" r="3.5"/>' +
+  '</svg>';
 
 const STATUS_LABEL = {
   busy: 'Working',
@@ -961,12 +971,13 @@ function applyStatus(node, row) {
 
   node.dataset.state = state;
   node.className = `status ${state}`;
-  node.innerHTML = state === 'busy' ? SPINNER_SVG : DOT_SVG;
+  node.innerHTML = state === 'busy' ? RUNNING_SVG : state === 'waiting' ? WAITING_SVG : IDLE_SVG;
   node.title = STATUS_LABEL[state];
 
   if (state === 'busy') {
     // Negative delay lines every spinner up on the same rotation angle no matter when
-    // its row was built — Primer's computeSyncDelay, same trick.
+    // its row was built, so a sidebar full of running agents doesn't look staggered —
+    // same trick as Primer's own computeSyncDelay.
     node.firstChild.style.animationDelay = `-${performance.now() % 1000}ms`;
     return;
   }
@@ -1381,7 +1392,7 @@ function makeTabRow(tabId) {
   node.tabIndex = -1;
   node.setAttribute('role', 'option');
   const status = el('span', 'status idle');
-  status.innerHTML = DOT_SVG;
+  status.innerHTML = IDLE_SVG;
   const title = el('div', 'row-title');
   const label = el('span', 'row-label');
   title.appendChild(label);

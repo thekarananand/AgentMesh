@@ -1,0 +1,22 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      # --ignore-scripts: lint doesn't need node-pty rebuilt against Electron's ABI (that
+      # postinstall step needs a compiler and has no Linux prebuild — see CLAUDE.md), and
+      # skipping it turns this into a fast, deterministic job instead of a fragile one.
+      - run: npm ci --ignore-scripts
+      - run: npm run lint
+      # No test step yet — there's no test framework in place. Add one here once there is.

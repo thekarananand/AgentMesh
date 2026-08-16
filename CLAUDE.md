@@ -77,18 +77,24 @@ not the goal itself; a CLI gap is worth closing when it serves one of the three 
   that came from the binary was confirmed this way.
 
 ## Files
-- `main.js` — BrowserWindow config, per-tab node-pty spawn (`spawnTab`), pty env scrubbing, pid→tab binding (`tabForPid`/`listAnnotated`, over the map `platform.parentMap()` returns), IPC wiring, session push to renderer
-- `preload.js` — contextBridge, exposes `window.ptyAPI` (per-tab terminal IO, keyed by `tabId`), `window.meshAPI` (sessions, plan usage, CLI info, warnings) and `window.platformAPI` (the two facts the page can't work out for itself: vibrancy, title-bar inset)
-- `renderer.js` — tab manager, xterm.js setup + theme, cell measurement, fit logic, sidebar render, sidebar resizer
-- `sessions.js` — reads `~/.claude/sessions/*.json` + `history.jsonl` + tails `~/.claude/projects/*/*.jsonl` for title/branch/cwd; pure Node, no Electron deps, unit-testable standalone
-- `rename.js` — renames a session in sync with the CLI: control socket for live ones, transcript records for dead ones; pure Node
-- `autoname.js` — promotes a session's AI title into its actual name so no session stays on its cwd-derived autoname
-- `usage.js` — the account's plan windows (5h / weekly): credential read, `/api/oauth/usage` fetch, normalizing, poll + backoff; pure Node, the OAuth token never leaves it
-- `platform.js` — **every OS branch in the app**: window chrome, pid→ppid map, shell selection + argument quoting, socket usability. Pure Node; nothing else may test `process.platform`
-- `config.js` — user settings (`settings.json` in the per-user data dir): `claudeBin`, `autoname`, `usage`. Pure Node, type-checked on read, atomic write
-- `claude.js` — locates the CLI (config override → login-shell `command -v`), probes its version, and is what `spawnTab` puts at the front of the pty command
-- `index.html` — shell page, `@font-face` for the bundled fonts, sidebar + terminal split layout, welcome/folder-picker pane
-- `titlebar.js` — shared `HEADER_HEIGHT` constant (main + preload both require it)
+
+Source lives under `src/`, split by process type: `src/main/` (the Electron main
+process), `src/preload/` (the contextBridge boundary), `src/renderer/` (the page
+itself), `src/lib/` (pure-Node modules shared across main/preload, no Electron
+dependency of their own).
+
+- `src/main/main.js` — BrowserWindow config, per-tab node-pty spawn (`spawnTab`), pty env scrubbing, pid→tab binding (`tabForPid`/`listAnnotated`, over the map `platform.parentMap()` returns), IPC wiring, session push to renderer
+- `src/preload/preload.js` — contextBridge, exposes `window.ptyAPI` (per-tab terminal IO, keyed by `tabId`), `window.meshAPI` (sessions, plan usage, CLI info, warnings) and `window.platformAPI` (the two facts the page can't work out for itself: vibrancy, title-bar inset)
+- `src/renderer/renderer.js` — tab manager, xterm.js setup + theme, cell measurement, fit logic, sidebar render, sidebar resizer
+- `src/renderer/index.html` — shell page, `@font-face` for the bundled fonts, sidebar + terminal split layout, welcome/folder-picker pane
+- `src/lib/sessions.js` — reads `~/.claude/sessions/*.json` + `history.jsonl` + tails `~/.claude/projects/*/*.jsonl` for title/branch/cwd; pure Node, no Electron deps, unit-testable standalone
+- `src/lib/rename.js` — renames a session in sync with the CLI: control socket for live ones, transcript records for dead ones; pure Node
+- `src/lib/autoname.js` — promotes a session's AI title into its actual name so no session stays on its cwd-derived autoname
+- `src/lib/usage.js` — the account's plan windows (5h / weekly): credential read, `/api/oauth/usage` fetch, normalizing, poll + backoff; pure Node, the OAuth token never leaves it
+- `src/lib/platform.js` — **every OS branch in the app**: window chrome, pid→ppid map, shell selection + argument quoting, socket usability. Pure Node; nothing else may test `process.platform`
+- `src/lib/config.js` — user settings (`settings.json` in the per-user data dir): `claudeBin`, `autoname`, `usage`. Pure Node, type-checked on read, atomic write
+- `src/lib/claude.js` — locates the CLI (config override → login-shell `command -v`), probes its version, and is what `spawnTab` puts at the front of the pty command
+- `src/lib/titlebar.js` — shared `HEADER_HEIGHT` constant (`preload.js` requires it directly; `main.js` gets it transitively through `platform.js`, which requires it at its own top level — one source of truth either way)
 - `assets/fonts/` — the bundled woff2 faces and their OFL license texts. Shipped, not installed
 - `assets/logo-white.svg` — `build/icon.svg` recolored to solid white on a transparent background
   (no separate source of truth; regenerate by hand from `icon.svg` if the mark changes). Used on
@@ -465,7 +471,7 @@ processes are `kind: 'bg'` too, and the process ancestry is
 - Binding is by **pid ancestry**: one `ps -Ao pid=,ppid=` per refresh, then walk the live session's pid up its parent chain until it hits a tab's shell pid (`tabForPid` in `main.js`). The `claude` process sits 1–3 hops above the pty shell, so the 24-hop cap is generous.
 - `syncTabs` binds each open terminal to the session that registered inside it, which is what the inline rename and the row's close button act on.
 - Row meta is **where and what**, not bookkeeping: project, branch, prompt count. No relative age, no pid — both were noise, and dropping age also removed the 30s repaint timer that existed only to keep it honest.
-- Status glyph follows **GitHub Actions**: amber Primer spinner while busy, green dot on idle, muted dot when dead. Colors are Primer's own dark tokens (`--fgColor-attention #d29922`, `--fgColor-success #3fb950`, `--fgColor-muted #9198a1`), markup is Octicons' `dot-fill` plus Primer's Spinner ring+arc. Every spinner gets a **negative `animation-delay`** (`-${performance.now() % 1000}ms`) so rows built at different times rotate in phase — same trick as Primer's `computeSyncDelay`. The busy→idle flip fires a one-shot ring pulse (`.landed`), tracked in `lastStatus`/`landed` **outside the DOM** because `render()` rebuilds every row on the 4s poll and would otherwise re-pulse forever. `prefers-reduced-motion` kills both animations.
+- Status glyph follows **GitHub Actions**'s three questions (running / blocked on you / at rest), but the glyphs themselves are drawn in the JetBrains Icons dark-variant language (`RUNNING_SVG`/`WAITING_SVG`/`IDLE_SVG` in `renderer.js`) rather than lifted from Primer/Octicons, since the pack has no equivalent of its own: amber ring-and-arc around a center dot while busy, amber two-bar glyph while waiting on you, a plain dot on idle, the same dot muted when dead. Running and idle share one r=3.5 center dot — the ring is the only thing that marks "in progress" apart from "at rest" — and waiting gets its own silhouette instead of reusing the dot at a different color, so the three states read apart by shape first, color second. Colors are still the app's own tokens (`--status-attention #d29922`, `--status-success #3fb950`, `--status-muted #9198a1`). Every running glyph gets a **negative `animation-delay`** (`-${performance.now() % 1000}ms`) so rows built at different times rotate in phase — same trick as Primer's `computeSyncDelay`. The busy→idle flip fires a one-shot ring pulse (`.landed`), tracked in `lastStatus`/`landed` **outside the DOM** because `render()` rebuilds every row on the 4s poll and would otherwise re-pulse forever. `prefers-reduced-motion` kills both animations.
 - Open rows carry a hover `×` that closes that terminal. It exists only on rows we host; everything else has no terminal to close.
 - `RECENT` group is collapsible and **collapsed by default** — live agents are the point, history is on demand. `LIVE` never collapses.
 - Right-click → reveals the session's cwd in Finder (`sessions:reveal`).
@@ -541,6 +547,14 @@ load-bearing and were each found by a failure:
   won't ship.
 - **`postinstall: electron-builder install-app-deps`** rebuilds node-pty against Electron's
   ABI. npm 11+ gates lifecycle scripts, so a fresh clone may need `npm approve-scripts` once.
+  If this never runs (or runs for the wrong arch — check `node_modules/node-pty/build/Release/.forge-meta`
+  against `process.arch`), `loadNativeModule` silently falls back to node-pty's own bundled
+  `prebuilds/darwin-*`, and **that shipped prebuild's `spawn-helper` is not executable** (644,
+  confirmed on a from-scratch `npm install node-pty@1.1.0` — an upstream packaging defect, not
+  local corruption). Same `posix_spawnp failed` symptom, different cause than the asar one
+  above. Fix is `npx electron-builder install-app-deps --arch=<arm64|x64>` to get a correct-arch
+  `build/Release` (node-gyp output is always 755), which then takes priority over the broken
+  prebuild and makes its permissions moot.
 
 macOS builds are unsigned without credentials; `build/entitlements.mac.plist` covers the
 hardened runtime (JIT, library validation off for the native module, `inherit` for the pty's

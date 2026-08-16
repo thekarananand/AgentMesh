@@ -100,6 +100,7 @@ information rather than failing — but if you run it on Windows, please report 
 
 ```bash
 npm start            # run from source
+npm run lint         # ESLint
 npm run pack         # unpacked build in dist/, for testing packaging itself
 npm run fonts        # regenerate assets/fonts/*.woff2 from installed TrueType originals
 npm run icon         # regenerate build/icon.png from build/icon.svg (macOS only)
@@ -123,3 +124,7 @@ verified.
   [Electron](https://electronjs.org)
 
 License texts for the bundled fonts sit beside them in `assets/fonts/`.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
