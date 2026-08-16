@@ -46,6 +46,10 @@ main/preload with no Electron dependency of their own.
 - **`src/lib/claude.js`** — locates the CLI (config override → login-shell `command -v`), probes its 
   version, and is what `spawnTab` puts at the front of the pty command
 
+- **`src/lib/debug.js`** — gates main-process debug logging behind `ELECTRON_ENABLE_LOGGING`, the 
+  same flag that already forwards the renderer's own `console.log` to the terminal. One function, 
+  `debugLog`, off by default.
+
 ## UI and styling
 
 - **`src/renderer/index.html`** — shell page, `@font-face` for the bundled fonts, sidebar + terminal split 

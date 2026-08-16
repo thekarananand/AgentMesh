@@ -7,6 +7,7 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "electron .",
+    "dev": "ELECTRON_ENABLE_LOGGING=1 electron .",
     "lint": "eslint .",
     "postinstall": "electron-builder install-app-deps",
     "fonts": "node tools/build-fonts.js",
@@ -70,6 +71,7 @@
       "src/lib/claude.js",
       "src/lib/platform.js",
       "src/lib/titlebar.js",
+      "src/lib/debug.js",
       "assets/**/*",
       "node_modules/xterm/lib/xterm.js",
       "node_modules/xterm/css/xterm.css",

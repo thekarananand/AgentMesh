@@ -525,8 +525,8 @@
       text-overflow: ellipsis;
     }
     .row.dim .row-title { color: var(--fg-muted); font-weight: 400; }
-    /* Keep the title clear of whatever button the row's state puts in the corner. */
-    .row.open .row-title, .row.elsewhere .row-title { padding-right: 20px; }
+    /* Keep the title clear of the close button an open row puts in the corner. */
+    .row.open .row-title { padding-right: 20px; }
 
     /* State the row is in, said in a word rather than in a message that appears after
        a click fails to do what it looked like it would. */
@@ -543,8 +543,18 @@
       line-height: 1.5;
     }
     .chip[hidden] { display: none; }
-    .chip.inuse { color: var(--status-attention); background: #d2992224; }
     .chip.fork { color: var(--accent); background: #4aa5f01f; }
+
+    /* Titles collide for all sorts of reasons — a fork's is copied wholesale from its
+       origin, two rows can share an autoname or an unrenamed first prompt — so every row
+       carries its own short session id, the one thing that's never shared, no matter how
+       many rows read the same title. */
+    .row-idhint {
+      flex: 0 0 auto;
+      font-family: ui-monospace, 'SF Mono', monospace;
+      font-size: 10px;
+      color: var(--fg-faint);
+    }
 
     /* Status glyph follows GitHub Actions: an amber spinner while the run is in
        flight, amber dot when it's blocked on you, a green dot the moment it lands,
@@ -560,6 +570,9 @@
     .status svg { display: block; width: 16px; height: 16px; }
     .status.idle { color: var(--status-success); }
     .status.busy, .status.waiting { color: var(--status-attention); }
+    /* ELSEWHERE rows: the glyph itself is the fork affordance, not a status this window
+       can vouch for. Same accent the fork chip/button already use. */
+    .status.forkable { color: var(--accent); }
 
     /* Primer's Spinner is 1s linear infinite. Each instance also gets a negative
        animation-delay in JS so rows that mount at different times still rotate in
@@ -593,7 +606,7 @@
        exists only on open rows. Every hosted tab has a card now — including FleetView
        and sessions too young to have registered — so "hosted" and "closable" finally
        mean the same set. */
-    .row-close, .row-fork {
+    .row-close {
       position: absolute;
       top: 6px;
       right: 6px;
@@ -607,16 +620,10 @@
       opacity: 0;
       transition: opacity 120ms var(--ease), background 120ms var(--ease), color 120ms var(--ease);
     }
-    .row-close svg, .row-fork svg { width: 11px; height: 11px; fill: currentColor; }
+    .row-close svg { width: 11px; height: 11px; fill: currentColor; }
     .row.open .row-close { display: inline-flex; }
     .row.open:hover .row-close { opacity: 1; }
     .row-close:hover { background: #ffffff1f; color: var(--danger); }
-
-    /* The fork button replaces a hidden ⌥click. It's the only action a session owned by
-       another process can take, so it's on the card, not in a modifier key. */
-    .row.elsewhere .row-fork { display: inline-flex; opacity: 0.55; }
-    .row.elsewhere:hover .row-fork { opacity: 1; }
-    .row-fork:hover { background: #ffffff1f; color: var(--accent); }
 
     .row-meta {
       grid-column: 2;

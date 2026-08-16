@@ -100,6 +100,7 @@ information rather than failing — but if you run it on Windows, please report 
 
 ```bash
 npm start            # run from source
+npm run dev          # run from source with debug logging (ELECTRON_ENABLE_LOGGING=1)
 npm run lint         # ESLint
 npm run pack         # unpacked build in dist/, for testing packaging itself
 npm run fonts        # regenerate assets/fonts/*.woff2 from installed TrueType originals

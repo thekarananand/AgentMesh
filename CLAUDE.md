@@ -95,6 +95,7 @@ dependency of their own).
 - `src/lib/config.js` — user settings (`settings.json` in the per-user data dir): `claudeBin`, `autoname`, `usage`. Pure Node, type-checked on read, atomic write
 - `src/lib/claude.js` — locates the CLI (config override → login-shell `command -v`), probes its version, and is what `spawnTab` puts at the front of the pty command
 - `src/lib/titlebar.js` — shared `HEADER_HEIGHT` constant (`preload.js` requires it directly; `main.js` gets it transitively through `platform.js`, which requires it at its own top level — one source of truth either way)
+- `src/lib/debug.js` — gates main-process debug logging behind `ELECTRON_ENABLE_LOGGING`, the same flag that already makes the renderer's own `console.log` reach the terminal. Pure Node, one function (`debugLog`)
 - `assets/fonts/` — the bundled woff2 faces and their OFL license texts. Shipped, not installed
 - `assets/logo-white.svg` — `build/icon.svg` recolored to solid white on a transparent background
   (no separate source of truth; regenerate by hand from `icon.svg` if the mark changes). Used on
@@ -299,6 +300,14 @@ were dropped because they cost a full repaint of every row; this costs one assig
 - **Renderer errors don't reach `npm start`'s stdout.** Launch with `ELECTRON_ENABLE_LOGGING=1`
   and the page's `console` lands in the log — otherwise a renderer that throws before first
   paint looks exactly like a window that opened fine.
+- **The same flag doubles as the debug-log switch**: `ELECTRON_ENABLE_LOGGING=1 npm start`
+  (or `npm run dev`, the same thing) turns on `[debug:main]` lines (`debug.js`, gated explicitly
+  since the flag only forwards the *renderer's* console by itself — main-process `console.log`
+  always reaches stdout regardless, so `debug.js` closes that gap) alongside `[debug:renderer]`
+  lines (plain `console.log`, which the flag already forwards on its own). Covers pty spawn/exit,
+  every IPC handler, CLI resolution, rename/usage outcomes, session-list pushes, tab open/close/
+  focus, and `render()`'s per-poll group counts. One flag, both processes, off by default so a
+  plain `npm start` stays exactly as quiet as it already was.
 - **Testing a *packaged* build**: run the binary directly with the cwd set to `/`
   (`cd / && dist/mac-arm64/AgentMesh.app/Contents/MacOS/AgentMesh`) — that reproduces the
   Finder/Dock launch, which is the only way the `process.cwd()` class of bug shows up. To
@@ -334,17 +343,17 @@ were dropped because they cost a full repaint of every row; this costs one assig
   unscoped-with-rows-behind-it, and **nothing at all** — which on a fresh machine is a first
   launch, not a failure, and says so.
 - **No folder chosen shows only `RECENT`, not the live groups.** Before a window is pointed
-  anywhere, `WAITING`/`RUNNING`/`IDLE` would be *every* agent on the machine — noise when the
-  point of that empty state is picking somewhere to start, and the opposite of what `#dir`'s own
-  folder-switch panel (below) is trying to offer as a short, calm list. `render()`'s `noFolder`
-  branch (`!windowDir`) suppresses the three live groups and leaves `RECENT` (session history)
-  as the only thing rendered — same underlying data the folder-switch panel reads. This is
-  distinct from the `projectOnly`-off case (`#filter` toggled to show every project while a
+  anywhere, `WAITING`/`RUNNING`/`IDLE`/`ELSEWHERE` would be *every* agent on the machine — noise
+  when the point of that empty state is picking somewhere to start, and the opposite of what
+  `#dir`'s own folder-switch panel (below) is trying to offer as a short, calm list. `render()`'s
+  `noFolder` branch (`!windowDir`) suppresses the four live groups and leaves `RECENT` (session
+  history) as the only thing rendered — same underlying data the folder-switch panel reads. This
+  is distinct from the `projectOnly`-off case (`#filter` toggled to show every project while a
   folder *is* chosen), which still shows everything on purpose — that one is the deliberate
   cross-project mesh view goal 1 exists for; `noFolder` is just "nothing to scope to yet."
 - Each tab owns a real pty running its own `claude` — tabs are not one TUI switched with `/resume`. That's what makes them independently interruptible and closable.
 - Click a row → if it's already bound to an open tab, focus that tab; if the session is **dead**, open a new tab running `claude --resume <sessionId>` in its own cwd. Live sessions this window doesn't host are never resumed — they fork, see below.
-- Groups are `WAITING` / `RUNNING` / `IDLE` / `RECENT`, one per registry status, ordered by what they want from you. The old single `LIVE` bucket answered three questions at once. `WAITING` carries the amber status color on its header; unknown registry statuses fall into `RUNNING` (`statusOf` treats anything that isn't `idle`/`waiting` as working). Hosted tabs with no session row sit at the top of `RUNNING`.
+- Groups are `WAITING` / `RUNNING` / `IDLE` / `ELSEWHERE` / `RECENT`, ordered by what they want from you. The old single `LIVE` bucket answered three questions at once. `WAITING` carries the amber status color on its header; unknown registry statuses fall into `RUNNING` (`statusOf` treats anything that isn't `idle`/`waiting` as working). Hosted tabs with no session row sit at the top of `RUNNING`. `ELSEWHERE` is a fourth question — not "what state is it in" but "whose is it" — and sits after `IDLE`: every row that's live and driven by a process this window doesn't own (`hostedElsewhere`/`isHostedElsewhere` in `renderer.js`) is pulled out of WAITING/RUNNING/IDLE regardless of its real status and grouped here instead, because that status belongs to whatever else is driving it, not to a question this window can answer. This now includes `kind: 'bg'` rows too — a bg job's own pid ancestry runs through the daemon's `bg-spare`/`bg-pty-host` chain, never through a locally-spawned tab's shell, so no hosted tab can ever bind to one; "not hosted" is unconditionally true for every live bg row, so it always lands in `ELSEWHERE` now, never in WAITING/RUNNING/IDLE. (Bg rows used to be a hard exception to this whole group specifically so their busy/idle status stayed visible regardless of hosting — see the status-glyph bullet below for where that reasoning still applies.) See "Resume is not attach" below for what a row in this group can do.
 - **Every hosted tab gets a card**, including ones no session row accounts for: a `claude agents` FleetView (hosts no sessionId of its own) and sessions too young to have registered. Before that, `.row-close` was gated on `.row.open`, which is `tabId && tabs.has(tabId)` — and `tabId` comes from walking the pid parent chain (`tabForPid`, main.js), which a daemon-owned bg agent never satisfies. Result: tabs that existed with no card and no way to close them.
 - Card subtitle is `background · project · branch · <relative time>`. Not prompt count (bookkeeping), not pid or byte size (those live in the hover tooltip). `project` is dropped when the row's own cwd matches `scopedDir` — not just whenever scoping is on — because a hosted tab from another folder can still be visible under scope (see below) and needs its project name precisely because it's the one row that doesn't match the rest of the list.
 - **`windowDir` is where the window is pointed** — one piece of renderer state answering that
@@ -406,17 +415,46 @@ underneath.
 ## Forks are not duplicates
 
 `--fork-session` copies the transcript wholesale, custom title included, so a fork and its origin
-render as the same card twice. Parentage comes from two sources, ledger first:
+render as the same card twice. Parentage comes from three sources:
 
 - **`forkOrigins` in `localStorage`** (renderer.js) — when *we* fork, we hold the parent id against
   the new tab (`pendingForks`) and bind it in `syncTabs` once that tab's session registers. Depends
-  on nothing internal to the CLI.
+  on nothing internal to the CLI. This is the one source that also gates the busy-suppression
+  below — see the chip-rendering note.
 - **`forkParent()`** (sessions.js) — first line of the transcript carries a `sessionId` that
-  disagrees with the filename → that's the parent. Cheap (8 KB head read, cached forever, the first
-  line never changes) but **unconfirmed against a real fork**: across 65 transcripts on this machine
-  no file carries a foreign session id, which only proves it doesn't false-positive. If forks turn
-  out to be rewritten to the new id on copy, this path is a permanent no-op and the ledger is
-  carrying the feature alone.
+  disagrees with the filename → that's the parent. **Confirmed a permanent no-op**: a real bg-job
+  fork's first transcript line carries its *own* id, not its origin's (see `readBgOrigins()`
+  below) — the copy is rewritten onto itself on creation, not left pointing at the parent. Kept
+  around (cheap, 8 KB head read, cached forever) in case some *other* fork path doesn't rewrite it,
+  but for every fork mechanism confirmed so far, the ledger and `readBgOrigins()` are carrying the
+  feature alone.
+- **`readBgOrigins()`** (sessions.js) — a bg job the daemon dispatches as a `--fork-session` copy of
+  some other live session is a fork too, just not one AgentMesh's own click ever touched, so
+  neither of the above two sources can see it. `daemon/roster.json`'s
+  `workers[short].dispatch.launch` has the answer: `sessionId` names the origin whenever
+  `launch.fork` is `true` — but shifts shape depending on it (a bare session id when resuming in
+  place, a full transcript **path** when forking), so this only reads the field for the forking
+  case. Verified against a real dispatch on this machine: a bg job named after its own first
+  prompt shared that title with a separate, unrelated-looking `ELSEWHERE` row — same underlying
+  transcript, forked at dispatch time — and `dispatch.launch.sessionId` named that row's session id
+  exactly.
+
+**Chip rendering treats these differently.** A ledger fork is *this window's own* click — the row
+is freshly spinning up and settles into `IDLE` within a poll or two, so the `fork` label is held
+back while it still reads `BUSY` (see the ELSEWHERE section above). A `forkOf` from
+`sessions.js` — `readBgOrigins()` in particular — is a relationship this window merely *observed*,
+which can stay `BUSY` for as long as the job runs; suppressing the label for that case would hide
+the one thing worth surfacing about it for the job's entire lifetime. Only the ledger case gets the
+busy hold-back (`renderer.js`, the `ledgerFork` vs. `next.forkOf` split in `_update`).
+
+**The chip alone isn't always enough.** A bg-dispatch fork's title is the *exact same string* as
+its origin's (copied wholesale, and neither has been given a real name) — confirmed live: an
+`ELSEWHERE` row and its bg-job fork sat in different groups, both reading "List all changes and
+summaries," indistinguishable except for the small `fork` chip and differing subtitle metadata.
+Titles collide for reasons that have nothing to do with forking too — an autoname, an unrenamed
+first prompt shared by two unrelated sessions — so `.row-idhint` (`renderer.js`, `makeRow`/`_update`)
+shows every row's own short session id (first 8 characters), muted, monospace: the one thing
+that's never shared, on every row, not just forks.
 
 Forks render indented under their origin with a `fork` chip. A fork whose origin is in a different
 group (parent idle, fork busy) stands on its own rather than dragging the parent across groups.
@@ -429,10 +467,25 @@ branch on `kind` from the pid registry (`'interactive'` | `'bg'`):
 - **`kind: 'interactive'`, running elsewhere** — the CLI allows it, and that's the trap. Each
   resume is a second live writer on one transcript. Left unguarded this compounds: one click per
   window per repaint produced 11 concurrent `claude --resume <same-id>` processes on this machine.
-  AgentMesh never resumes one. The row carries an **`in use` chip and a fork button**, and a plain
-  click forks (`--fork-session`, new session id, name deliberately not carried over). This used to
-  be a hidden **⌥click** plus a transient row message explaining why the plain click did nothing —
-  a modifier key is not an affordance, and an error after the fact is not a design.
+  AgentMesh never resumes one. The row lives in the **`ELSEWHERE`** group, and a plain click forks
+  it (`--fork-session`, new session id, name deliberately not carried over) — there is no
+  dedicated fork button any more; the row's own status glyph *is* the affordance (see the status
+  glyph bullet below), and the row-level click handler already forks any row it doesn't host, so
+  a separate button was a second way to trigger the exact same thing the row itself already did.
+  This used to be a hidden **⌥click** plus a transient row message explaining why the plain click
+  did nothing — a modifier key is not an affordance, and an error after the fact is not a design.
+  It also used to be an `in use` chip mixed into whichever of WAITING/RUNNING/IDLE the row's own
+  status happened to land in; that status belongs to whichever process is actually driving it,
+  not to this window, so every such row moved into one group instead (see the sidebar-groups
+  bullet above) and the chip was dropped — the group heading already says it. The chip's `fork`
+  sibling (shown on a row that's itself a fork of something) is unrelated and unaffected, except
+  that it's held back while a freshly-forked *hosted* row reads `busy` — the label reappears once
+  it settles into `IDLE`, which is virtually immediate since nothing has prompted the new copy yet.
+  **A click on the same ELSEWHERE row twice used to fork it twice** — confirmed live via the debug
+  logs: two clicks on one origin produced two independent forked tabs, not a refocus of the first.
+  `activateRow` now checks `pendingForks` (a fork just spun up, not yet registered) and
+  `forkLedger` (one already confirmed) before opening a new one, and reuses whichever tab
+  matches — same "already open, just focus" principle the bg-row branch below already had.
 - **`kind: 'bg'`** — the CLI refuses outright: `Error: Session <id> is currently running as a
   background agent (bg). Use \`claude agents\` to find and attach to it, or add --fork-session to
   branch off a copy.` The guard is `if (!t.forkSession) { … await $Fe(sessionId) … }` on every
@@ -440,6 +493,14 @@ branch on `kind` from the pid registry (`'interactive'` | `'bg'`):
   `claude agents --cwd <row.cwd>` — FleetView is the only real attach path; there is **no
   `--attach` flag**, attaching is a keystroke inside that TUI (`bg-attach` / `job_attach` in the
   binary, driven over the daemon's `bg-pty-host` socket).
+  A bg row's underlying pid never binds to a hosted `tabId` — its process ancestry runs through
+  the daemon's own `bg-spare`/`bg-pty-host` chain, never through a tab's own shell — so the row
+  click's usual "already open, just focus" shortcut (`cur.tabId && tabs.has(cur.tabId)`) can never
+  fire for one. Left unguarded, every single click on the same bg row spawned a brand new
+  `claude agents` tab, and the daemon's own pre-warmed-spare pool (see below) is a hair trigger
+  for exactly this: merely opening the TUI again is enough to register yet another spare.
+  `activateRow` now looks for a tab already carrying `agentsView: true` for that row's `cwd`
+  and focuses it instead of opening a second one.
 
 Background agents also differ in the registry: `kind: 'bg'`, a `jobId`, no `nameSource`, and
 `name` is the **entire dispatch prompt including newlines** — `liveCustomName()` collapses
@@ -472,6 +533,7 @@ processes are `kind: 'bg'` too, and the process ancestry is
 - `syncTabs` binds each open terminal to the session that registered inside it, which is what the inline rename and the row's close button act on.
 - Row meta is **where and what**, not bookkeeping: project, branch, prompt count. No relative age, no pid — both were noise, and dropping age also removed the 30s repaint timer that existed only to keep it honest.
 - Status glyph follows **GitHub Actions**'s three questions (running / blocked on you / at rest), but the glyphs themselves are drawn in the JetBrains Icons dark-variant language (`RUNNING_SVG`/`WAITING_SVG`/`IDLE_SVG` in `renderer.js`) rather than lifted from Primer/Octicons, since the pack has no equivalent of its own: amber ring-and-arc around a center dot while busy, amber two-bar glyph while waiting on you, a plain dot on idle, the same dot muted when dead. Running and idle share one r=3.5 center dot — the ring is the only thing that marks "in progress" apart from "at rest" — and waiting gets its own silhouette instead of reusing the dot at a different color, so the three states read apart by shape first, color second. Colors are still the app's own tokens (`--status-attention #d29922`, `--status-success #3fb950`, `--status-muted #9198a1`). Every running glyph gets a **negative `animation-delay`** (`-${performance.now() % 1000}ms`) so rows built at different times rotate in phase — same trick as Primer's `computeSyncDelay`. The busy→idle flip fires a one-shot ring pulse (`.landed`), tracked in `lastStatus`/`landed` **outside the DOM** because `render()` rebuilds every row on the 4s poll and would otherwise re-pulse forever. `prefers-reduced-motion` kills both animations.
+  A fourth glyph state, `forkable`, overrides all three for any row `isHostedElsewhere` catches — **except** `kind: 'bg'` rows, which are exempt from this glyph specifically even though they're now grouped in `ELSEWHERE` (see the sidebar-groups bullet above): the busy/waiting/idle question isn't one this window can answer for a session it doesn't drive, so the dot is replaced outright with `FORK_SVG`, in `--accent` rather than any status color — the glyph itself is the affordance now (there is no separate fork button; see "Resume is not attach" above), rather than a status this window can't vouch for. A bg row doesn't fork on click, though — it opens FleetView — so tagging it with the fork glyph would advertise an action it doesn't do; it keeps its real `RUNNING_SVG`/`WAITING_SVG`/`IDLE_SVG` instead, the one piece of the old "bg is excluded" reasoning that still applies once grouping and glyph-choice split apart. No spin, no landing pulse for a genuinely forkable row; those are meaningful only for a status this window can actually track over time. `FORK_SVG` keeps Octicons' `git-branch` *topology* — a main line with one side branch peeling off partway up to its own node, asymmetric rather than a symmetric Y where the stem terminates at the split — but redrawn in the app's thin-stroke, small-filled-node language to match `RUNNING_SVG`/`WAITING_SVG`/`IDLE_SVG`, since the pack itself has no fork/branch glyph to lift verbatim (file-type icons only). A first attempt simplified the topology into a plain symmetric Y and was rejected on sight; this keeps the original asymmetry.
 - Open rows carry a hover `×` that closes that terminal. It exists only on rows we host; everything else has no terminal to close.
 - `RECENT` group is collapsible and **collapsed by default** — live agents are the point, history is on demand. `LIVE` never collapses.
 - Right-click → reveals the session's cwd in Finder (`sessions:reveal`).

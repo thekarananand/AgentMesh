@@ -229,6 +229,7 @@ function renderWarnings() {
 }
 
 window.meshAPI.onWarning(({ kind, message }) => {
+  console.log('[debug:renderer] app-warning:', kind, message);
   if (!message || warnings.has(kind)) return;
   warnings.set(kind, message);
   renderWarnings();
@@ -313,6 +314,7 @@ document.addEventListener(
 
 function setActive(tabId) {
   if (!tabs.has(tabId)) return;
+  console.log('[debug:renderer] setActive:', tabId);
   activeTabId = tabId;
   for (const [id, tab] of tabs) tab.host.classList.toggle('hidden', id !== tabId);
   showWelcome(false);
@@ -330,6 +332,7 @@ function setActive(tabId) {
 function closeTab(tabId) {
   const tab = tabs.get(tabId);
   if (!tab) return;
+  console.log('[debug:renderer] closeTab:', tabId, tab.sessionId || '(no session yet)');
   window.ptyAPI.close(tabId);
   tab.term.dispose();
   tab.host.remove();
@@ -357,6 +360,7 @@ function closeTab(tabId) {
 // the geometry it was built with isn't. Waiting costs nothing after the first tab: the
 // promise is already settled and this is one microtask.
 function openTab(opts) {
+  console.log('[debug:renderer] openTab:', JSON.stringify(opts));
   fontsReady().then(() => createTerminal(opts));
 }
 
@@ -397,6 +401,7 @@ function createTerminal(opts) {
       sessionId: opts.resumeSessionId || null,
       title: opts.title || null,
       cwd: opts.launchCwd || null,
+      agentsView: Boolean(opts.agentsView),
     });
     term.onData((data) => window.ptyAPI.sendInput(tabId, data));
 
@@ -646,6 +651,7 @@ function syncWelcomeCopy() {
 }
 
 function applyClaudeInfo(info) {
+  console.log('[debug:renderer] applyClaudeInfo:', info ? JSON.stringify(info) : 'null');
   claudeInfo = info || null;
   syncNewAgentButton();
   syncWelcomeCopy();
@@ -886,10 +892,18 @@ const X_SVG =
   '<svg viewBox="0 0 16 16" aria-hidden="true">' +
   '<path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.749.749 0 0 1 1.275.326.749.749 0 0 1-.215.734L9.06 8l3.22 3.22a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215L8 9.06l-3.22 3.22a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z"/>' +
   '</svg>';
-// git-branch: the fork affordance on a session someone else is already driving.
+// git-branch, redrawn: keeps Octicons' topology (a main line with one side branch
+// peeling off partway up to its own node — asymmetric, not a symmetric Y where the stem
+// terminates at the split) but restyled in the app's own thin-stroke, small-filled-node
+// language (RUNNING_SVG/WAITING_SVG/IDLE_SVG) rather than Octicons' filled-ribbon style,
+// since the pack itself has no fork/branch glyph to lift verbatim (file-type icons only).
 const FORK_SVG =
-  '<svg viewBox="0 0 16 16" aria-hidden="true">' +
-  '<path d="M9.5 3.25a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.878A2.49 2.49 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25Zm-6 0a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0Zm8.25-.75a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5ZM4.25 12a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Z"/>' +
+  '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true">' +
+  '<path d="M5 11V5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>' +
+  '<path d="M5 8L11 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>' +
+  '<circle cx="5" cy="11" r="1.2" fill="currentColor"/>' +
+  '<circle cx="5" cy="5" r="1.2" fill="currentColor"/>' +
+  '<circle cx="11" cy="5" r="1.2" fill="currentColor"/>' +
   '</svg>';
 // JetBrains Icons (dark), chevron_right.svg path geometry — see assets/icons/jetbrains-icons.
 // Drives the RECENT group's collapse toggle (.chev), which inherits `color` from
@@ -952,6 +966,18 @@ function statusOf(row) {
   return 'busy';
 }
 
+// Live, interactive, and driven by something other than this window. Background agents
+// are excluded: they're daemon-owned by definition, `background` in the subtitle already
+// says so, and clicking one attaches through FleetView rather than forking.
+// A bg job's own pid ancestry runs through the daemon's bg-spare/bg-pty-host chain,
+// never through a locally-spawned tab's shell — no hosted FleetView tab is ever its
+// parent, so `row.tabId` can never bind for one. That makes "not hosted" true for every
+// live bg row unconditionally, same as any other row this window doesn't drive: it goes
+// to ELSEWHERE regardless of its own busy/waiting/idle status.
+function isHostedElsewhere(row) {
+  return row.live && !(row.tabId && tabs.has(row.tabId));
+}
+
 // busy -> not-busy is the interesting edge ("it finished, it's your turn"), and it has
 // to be remembered outside the DOM: `lastStatus` holds the previous poll's state per
 // session, `landed` records the sessions whose arrival pulse has already played so a
@@ -962,8 +988,17 @@ const landed = new Set();
 // Mutates an existing glyph in place. Rewriting the markup on every 4s poll would
 // restart the spinner's rotation each time, which is exactly the kind of jitter that
 // reads as carelessness — so an unchanged state touches nothing at all.
+//
+// A forkable row's busy/waiting/idle status belongs to whatever else is driving it, not
+// to this window, so the glyph itself says "fork" rather than a status this window can't
+// vouch for — replacing running/waiting/idle outright instead of just skipping the pulse.
+// A bg row in ELSEWHERE is exempt: clicking it opens FleetView, not a fork, so tagging it
+// with the fork glyph would advertise an action it doesn't actually do. Its real
+// busy/waiting/idle status is exactly the thing worth showing at a glance instead — the
+// same reasoning that used to keep every bg row out of ELSEWHERE entirely.
 function applyStatus(node, row) {
-  const state = statusOf(row);
+  const forkable = isHostedElsewhere(row) && row.kind !== 'bg';
+  const state = forkable ? 'forkable' : statusOf(row);
   const prev = lastStatus.get(row.sessionId);
   lastStatus.set(row.sessionId, state);
   if (state === 'busy') landed.delete(row.sessionId); // a fresh run earns a fresh pulse
@@ -971,8 +1006,8 @@ function applyStatus(node, row) {
 
   node.dataset.state = state;
   node.className = `status ${state}`;
-  node.innerHTML = state === 'busy' ? RUNNING_SVG : state === 'waiting' ? WAITING_SVG : IDLE_SVG;
-  node.title = STATUS_LABEL[state];
+  node.innerHTML = forkable ? FORK_SVG : state === 'busy' ? RUNNING_SVG : state === 'waiting' ? WAITING_SVG : IDLE_SVG;
+  node.title = forkable ? 'Fork to open your own copy — driven by another process' : STATUS_LABEL[state];
 
   if (state === 'busy') {
     // Negative delay lines every spinner up on the same rotation angle no matter when
@@ -1044,6 +1079,7 @@ function beginRename(labelEl, sessionId, currentTitle) {
     labelEl.textContent = name; // optimistic; the watcher confirms or corrects it
     input.replaceWith(labelEl);
     const res = await window.meshAPI.rename(sessionId, name);
+    console.log(`[debug:renderer] rename ${sessionId} -> "${name}":`, JSON.stringify(res));
     if (!res || !res.ok) {
       labelEl.textContent = currentTitle;
       labelEl.classList.add('rename-failed');
@@ -1134,7 +1170,34 @@ function tooltip(row) {
 function activateRow(row) {
   if (row.live) {
     if (row.kind === 'bg') {
+      // A bg row never binds to a hosted tabId (its process ancestry runs through the
+      // daemon's own bg-spare/bg-pty-host chain, not through any tab's shell), so the
+      // row-click's usual "already open, just focus" shortcut never fires for these —
+      // every click fell through to a brand new `claude agents` tab, and the bg daemon's
+      // own pre-warmed-spare pool is enough of a hair trigger that merely opening that
+      // TUI again registers yet another spare. Look for a FleetView tab already open on
+      // this cwd first.
+      const existing = [...tabs].find(([, t]) => t.agentsView && t.cwd === row.cwd);
+      if (existing) {
+        console.log('[debug:renderer] activateRow bg: reusing FleetView tab', existing[0], 'for', row.cwd);
+        setActive(existing[0]);
+        return;
+      }
       openTab({ launchCwd: row.cwd, agentsView: true, title: 'agents' });
+      return;
+    }
+    // Forking mints a new session every time it runs, and nothing checked before this
+    // whether a fork of this exact origin was already sitting open — confirmed live: two
+    // clicks on the same ELSEWHERE row produced two independent forked tabs instead of
+    // refocusing the first. `pendingForks` catches one just spun up but not yet
+    // registered; `forkLedger` catches one already confirmed. Either match means reuse.
+    const alreadyForked = [...tabs.keys()].find((tabId) => {
+      const t = tabs.get(tabId);
+      return pendingForks.get(tabId) === row.sessionId || forkLedger.get(t.sessionId) === row.sessionId;
+    });
+    if (alreadyForked) {
+      console.log('[debug:renderer] activateRow fork: reusing existing fork tab', alreadyForked, 'of', row.sessionId);
+      setActive(alreadyForked);
       return;
     }
     openTab({
@@ -1166,21 +1229,21 @@ function makeRow(row) {
   const status = el('span', 'status');
   const title = el('div', 'row-title');
   const label = el('span', 'row-label');
-  // Two mutually exclusive states worth a word: this is a copy of another session, or
-  // this session belongs to a process we are not.
+  // Worth a word only when this row is itself a copy of another session — "in use" used
+  // to share this chip too, dropped once the ELSEWHERE group made it redundant.
   const chip = el('span', 'chip');
-  title.append(label, chip);
+  // Titles collide for all sorts of reasons — a fork's is copied wholesale from its
+  // origin, two sessions can share an autoname or an unrenamed first prompt — so every
+  // row carries its own short session id, the one thing that's never shared.
+  const idHint = el('span', 'row-idhint');
+  title.append(label, chip, idHint);
   const metaEl = el('div', 'row-meta');
 
   const close = el('span', 'row-close');
   close.innerHTML = X_SVG;
   close.title = 'Close this terminal';
 
-  const forkBtn = el('span', 'row-fork');
-  forkBtn.innerHTML = FORK_SVG;
-  forkBtn.title = 'Open a copy — this session is being driven by another process';
-
-  node.append(status, title, metaEl, close, forkBtn);
+  node.append(status, title, metaEl, close);
 
   // The arrival animation is one-shot; the landing pulse on the status glyph bubbles
   // its own animationend through here, so match on the target before clearing.
@@ -1208,10 +1271,7 @@ function makeRow(row) {
   node._update = (next, depth = 0) => {
     cur = next;
     const ours = Boolean(next.tabId && tabs.has(next.tabId));
-    // Live, interactive, and driven by something other than this window. Background
-    // agents are excluded: they're daemon-owned by definition, `background` in the
-    // subtitle already says so, and clicking one attaches through FleetView.
-    const elsewhere = next.live && !ours && next.kind !== 'bg';
+    const elsewhere = isHostedElsewhere(next);
 
     if (ours) clearPending(); // the thing the click promised now exists
     node.classList.toggle('open', ours);
@@ -1219,7 +1279,6 @@ function makeRow(row) {
     // once and so can't answer "where am I" — this can, and only ever for one row.
     node.classList.toggle('active-tab', ours && next.tabId === activeTabId);
     node.setAttribute('aria-selected', String(ours && next.tabId === activeTabId));
-    node.classList.toggle('elsewhere', elsewhere);
     node.classList.toggle('dim', !next.live);
     node.classList.toggle('child', depth > 0);
     node.style.setProperty('--depth', String(depth));
@@ -1231,11 +1290,31 @@ function makeRow(row) {
 
     // A fork carries its origin's title verbatim, so without this the two are the same
     // card twice. The nesting says which one it came from; the chip says what it is.
-    const isFork = Boolean(parentOf(next));
-    const chipText = isFork ? 'fork' : elsewhere ? 'in use' : '';
+    // "in use" is dropped from here entirely — the ELSEWHERE group heading already says
+    // it for every row inside it, so repeating it on each row would say the same fact
+    // twice.
+    //
+    // Two different provenances share this chip and need different treatment. A ledger
+    // entry (`forkLedger`) means *this window* just clicked fork — that row is freshly
+    // spinning up and settles into IDLE within a poll or two, so the label is held back
+    // while it reads BUSY rather than tagging a brand new tab "fork" while it looks like
+    // it's already mid-task. `next.forkOf` (sessions.js) is a relationship this window
+    // merely *observed* — e.g. a background job the daemon dispatched as a `--fork-session`
+    // copy of some other live session, which can run BUSY for as long as the job takes.
+    // Suppressing the label for that case would hide the one thing worth surfacing about
+    // it, for the entire life of the job. Only a ledger fork gets the busy hold-back.
+    const ledgerFork = forkLedger.get(next.sessionId) || null;
+    const isFork = Boolean(next.forkOf || ledgerFork);
+    const hideForkWhileRunning = Boolean(ledgerFork) && !elsewhere && statusOf(next) === 'busy';
+    const chipText = isFork && !hideForkWhileRunning ? 'fork' : '';
     chip.textContent = chipText;
-    chip.className = `chip${chipText ? ` ${isFork ? 'fork' : 'inuse'}` : ''}`;
+    chip.className = `chip${chipText ? ' fork' : ''}`;
     chip.hidden = !chipText;
+
+    // Every row, not just forks — a title collision isn't unique to forking (autoname,
+    // an unrenamed session, two sessions started from the same first prompt), and the
+    // session id is the one thing that's never shared regardless of why two titles match.
+    idHint.textContent = next.sessionId.slice(0, 8);
 
     renderMeta(metaEl, next);
     node.title = tooltip(next); // full metadata on hover — cheap inspector, no detail pane yet
@@ -1244,14 +1323,6 @@ function makeRow(row) {
   close.addEventListener('click', (e) => {
     e.stopPropagation();
     closeTab(cur.tabId);
-  });
-
-  forkBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    clearTimeout(openTimer);
-    openTimer = null;
-    markPending();
-    activateRow(cur);
   });
 
   // Double-click renames, so a click that would *spawn* a tab has to wait long enough
@@ -1348,6 +1419,11 @@ const runningGroupEl = makeGroup('RUNNING', false);
 const idleGroupEl = makeGroup('IDLE', false);
 // Same amber the waiting glyph uses — the header and the dots under it say one thing.
 waitingGroupEl.classList.add('urgent');
+// A row's own busy/waiting/idle status belongs to whatever other process is driving it,
+// not to this window — the only honest action here is forking it, so these sit in one
+// group of their own rather than scattered across WAITING/RUNNING/IDLE by a status this
+// window has no say over.
+const elsewhereGroupEl = makeGroup('ELSEWHERE', false);
 const recentGroupEl = makeGroup('RECENT', true, () => {
   recentOpen = !recentOpen;
   render();
@@ -1707,10 +1783,20 @@ function render() {
   const hidden = scopedDir ? rows.length - visible.length : 0;
   if (hidden > 0) moreEl._update(hidden);
 
-  const waiting = visible.filter((r) => statusOf(r) === 'waiting');
-  const running = visible.filter((r) => statusOf(r) === 'busy');
-  const idle = visible.filter((r) => statusOf(r) === 'idle');
+  // A row driven by another process reports a status that belongs to that process, not
+  // to this window, so it's pulled out of WAITING/RUNNING/IDLE entirely and grouped by
+  // "not ours" instead — see elsewhereGroupEl above.
+  const hostedElsewhere = visible.filter(isHostedElsewhere);
+  const elsewhereIds = new Set(hostedElsewhere.map((r) => r.sessionId));
+  const waiting = visible.filter((r) => !elsewhereIds.has(r.sessionId) && statusOf(r) === 'waiting');
+  const running = visible.filter((r) => !elsewhereIds.has(r.sessionId) && statusOf(r) === 'busy');
+  const idle = visible.filter((r) => !elsewhereIds.has(r.sessionId) && statusOf(r) === 'idle');
   const past = visible.filter((r) => !r.live);
+
+  console.log(
+    `[debug:renderer] render(): waiting=${waiting.length} running=${running.length} idle=${idle.length} ` +
+      `elsewhere=${hostedElsewhere.length} recent=${past.length} orphanTabs=${orphanTabs.length} hidden=${hidden}`
+  );
 
   // With no folder chosen at all, the live groups would be every agent running anywhere
   // on the machine — noise when the point of the empty state is picking somewhere to
@@ -1750,6 +1836,10 @@ function render() {
   if (idle.length && !noFolder) {
     idleGroupEl._update(idle.length);
     desired.push(idleGroupEl, ...nest(idle));
+  }
+  if (hostedElsewhere.length && !noFolder) {
+    elsewhereGroupEl._update(hostedElsewhere.length);
+    desired.push(elsewhereGroupEl, ...nest(hostedElsewhere));
   }
   if (past.length) {
     recentGroupEl._update(past.length, recentOpen);
@@ -1792,11 +1882,13 @@ filterEl.addEventListener('click', () => {
 });
 
 window.meshAPI.onUpdate((next) => {
+  console.log(`[debug:renderer] sessions-update: ${next.length} rows`);
   rows = next;
   render();
 });
 
 window.meshAPI.list().then((next) => {
+  console.log(`[debug:renderer] meshAPI.list() resolved: ${next.length} rows`);
   rows = next;
   render();
 });
@@ -1861,6 +1953,7 @@ function paintUsageFoot() {
 }
 
 function renderUsage(value) {
+  console.log('[debug:renderer] renderUsage:', value ? `stale=${Boolean(value.stale)}` : 'null');
   usageData = value && value.windows && value.windows.length ? value : null;
 
   if (!usageData) {

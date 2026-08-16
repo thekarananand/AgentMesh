@@ -65,6 +65,29 @@ function readSpares() {
   return set;
 }
 
+// A bg job dispatched from an interactive session via `--fork-session` copies that
+// session's transcript, same as a plain AgentMesh fork — but rewrites the copy's own
+// sessionId onto itself rather than preserving the origin's (confirmed: a real bg job's
+// first transcript line carried its own id, not its parent's), so `forkParent()`'s
+// transcript-header check is a permanent no-op for this kind of fork. The daemon's own
+// dispatch record still has the answer: `dispatch.launch.sessionId` names the origin
+// whenever `dispatch.launch.fork` is true — but shifts shape depending on it (a bare
+// session id when resuming in place, a full transcript *path* when forking), so this
+// only reads it for the forking case, which is the only one that needs a parent.
+function readBgOrigins() {
+  const raw = safeParse(readFileQuiet(ROSTER_FILE) || '');
+  const map = new Map(); // bg job's sessionId -> origin sessionId
+  if (!raw || !raw.workers) return map;
+  for (const w of Object.values(raw.workers)) {
+    if (!w || !w.sessionId) continue;
+    const launch = (w.dispatch && w.dispatch.launch) || {};
+    if (launch.fork !== true || typeof launch.sessionId !== 'string') continue;
+    const origin = path.basename(launch.sessionId, '.jsonl');
+    if (origin && origin !== w.sessionId) map.set(w.sessionId, origin);
+  }
+  return map;
+}
+
 // roster.json is internal state like everything else here, so if it's missing or a
 // version bump renames those fields, fall back to the registry shape of an unclaimed
 // spare: a bg session whose name is nothing but its own short job id. A real background
@@ -306,6 +329,7 @@ function list() {
   const live = readLive();
   const history = readHistory();
   const transcripts = listTranscripts().slice(0, MAX_SESSIONS);
+  const bgOrigins = readBgOrigins();
   const seen = new Set();
   const rows = [];
 
@@ -329,7 +353,7 @@ function list() {
       customTitle: custom || null,
       aiTitle: meta.aiTitle || null,
       file: t.file,
-      forkOf: forkParent(t.file, t.sessionId),
+      forkOf: forkParent(t.file, t.sessionId) || bgOrigins.get(t.sessionId) || null,
       intent: h.firstPrompt || null,
       lastPrompt: h.lastPrompt || null,
       promptCount: h.promptCount || 0,
@@ -363,7 +387,7 @@ function list() {
       customTitle: liveCustomName(l),
       aiTitle: null,
       file: null,
-      forkOf: null,
+      forkOf: bgOrigins.get(sessionId) || null,
       intent: null,
       lastPrompt: null,
       promptCount: 0,

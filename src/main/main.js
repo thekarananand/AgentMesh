@@ -11,6 +11,7 @@ const sessions = require('../lib/sessions');
 const { rename } = require('../lib/rename');
 const { autoName } = require('../lib/autoname');
 const usage = require('../lib/usage');
+const { debugLog } = require('../lib/debug');
 
 let win;
 let unwatch;
@@ -61,7 +62,10 @@ function listAnnotated() {
   const shellToTab = new Map();
   for (const [tabId, proc] of ptys) shellToTab.set(proc.pid, tabId);
   const { map: parents, ok, error } = platform.parentMap();
-  if (!ok && !pidWalkBroken) pidWalkBroken = error || 'process list unavailable';
+  if (!ok && !pidWalkBroken) {
+    pidWalkBroken = error || 'process list unavailable';
+    debugLog('pid walk broken:', pidWalkBroken);
+  }
 
   for (const row of rows) {
     row.tabId = row.live && row.pid ? tabForPid(row.pid, parents, shellToTab) : null;
@@ -75,6 +79,7 @@ let pidWalkReported = false;
 function pushSessions() {
   if (!win || win.isDestroyed()) return;
   const rows = listAnnotated();
+  debugLog(`pushSessions: ${rows.length} rows, ${rows.filter((r) => r.live).length} live`);
   try {
     win.webContents.send('sessions-update', rows);
   } catch {}
@@ -102,6 +107,7 @@ function pushSessions() {
 // Plan usage is one account-wide fact, so it rides its own channel rather than being
 // stapled onto every session row.
 function pushUsage(value) {
+  debugLog('pushUsage:', value ? `stale=${Boolean(value.stale)}` : 'null');
   if (!win || win.isDestroyed()) return;
   try {
     win.webContents.send('usage-update', value);
@@ -112,6 +118,8 @@ function pushUsage(value) {
 // that's what makes tabs independently interruptible and closable.
 function spawnTab({ resumeSessionId, resumeName, launchCwd, forkSession, agentsView } = {}) {
   const tabId = crypto.randomUUID();
+  const mode = agentsView ? 'agents' : forkSession ? 'fork' : resumeSessionId ? 'resume' : 'new';
+  debugLog(`spawnTab ${tabId}: mode=${mode} cwd=${launchCwd || '(home)'}${resumeSessionId ? ` resume=${resumeSessionId}` : ''}`);
 
   let cmd = claudeCli.command();
   if (agentsView) {
@@ -149,7 +157,8 @@ function spawnTab({ resumeSessionId, resumeName, launchCwd, forkSession, agentsV
     if (win && !win.isDestroyed()) win.webContents.send('pty-data', { tabId, data });
   });
 
-  proc.onExit(() => {
+  proc.onExit(({ exitCode, signal }) => {
+    debugLog(`spawnTab ${tabId}: exited code=${exitCode} signal=${signal ?? '(none)'}`);
     ptys.delete(tabId);
     if (win && !win.isDestroyed()) win.webContents.send('pty-exit', { tabId });
     pushSessions();
@@ -163,6 +172,7 @@ function spawnTab({ resumeSessionId, resumeName, launchCwd, forkSession, agentsV
 }
 
 function createWindow() {
+  debugLog('createWindow');
   win = new BrowserWindow({
     width: 1100,
     height: 700,
@@ -194,7 +204,11 @@ function createWindow() {
     pushSessions();
   });
 
-  ipcMain.handle('sessions:list', () => listAnnotated());
+  ipcMain.handle('sessions:list', () => {
+    const rows = listAnnotated();
+    debugLog(`ipc sessions:list -> ${rows.length} rows`);
+    return rows;
+  });
 
   ipcMain.handle('claude:info', () => claudeCli.info());
 
@@ -213,6 +227,7 @@ function createWindow() {
   ipcMain.handle('usage:get', () => usage.snapshot());
   ipcMain.handle('usage:refresh', async () => {
     const value = await usage.refresh({ force: true });
+    debugLog('ipc usage:refresh ->', value ? `stale=${Boolean(value.stale)}` : 'null');
     pushUsage(value);
     return value;
   });
@@ -223,7 +238,9 @@ function createWindow() {
       buttonLabel: 'Open',
       properties: ['openDirectory', 'createDirectory'],
     });
-    return res.canceled || !res.filePaths.length ? null : res.filePaths[0];
+    const picked = res.canceled || !res.filePaths.length ? null : res.filePaths[0];
+    debugLog('ipc dialog:pick-directory ->', picked || '(canceled)');
+    return picked;
   });
 
   // Search for files by name in common locations (used for drag-and-drop)
@@ -263,6 +280,7 @@ function createWindow() {
   ipcMain.handle('sessions:rename', async (event, { sessionId, name }) => {
     const row = sessions.list().find((s) => s.sessionId === sessionId);
     const result = await rename(row, name);
+    debugLog(`ipc sessions:rename ${sessionId} -> "${name}":`, JSON.stringify(result));
     // The live path lands in files the session watcher is already watching, but the
     // archived path only touches a transcript — push either way so the row updates
     // without waiting on the poll.
@@ -274,8 +292,10 @@ function createWindow() {
   // place the user is already looking — spawning a tab that dies at exit 127 is not an
   // error message.
   win.webContents.on('did-finish-load', () => {
+    debugLog('did-finish-load');
     pushSessions();
     claudeCli.resolve({ override: config.get().claudeBin }).then((cli) => {
+      debugLog('claudeCli.resolve ->', JSON.stringify(cli));
       if (!win || win.isDestroyed()) return;
       try {
         win.webContents.send('claude-info', cli);
@@ -298,6 +318,7 @@ function createWindow() {
   win.on('focus', () => usage.refresh().then(pushUsage));
 
   win.on('closed', () => {
+    debugLog(`window closed, killing ${ptys.size} pty(s)`);
     if (unwatch) unwatch();
     if (unpollUsage) unpollUsage();
     for (const proc of ptys.values()) proc.kill();
