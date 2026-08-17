@@ -188,6 +188,50 @@ function createWindow() {
 
   win.loadFile(path.join(__dirname, '../renderer/index.html'));
 
+  // Find the CLI before anyone can click New session. If it isn't there, say so in the one
+  // place the user is already looking — spawning a tab that dies at exit 127 is not an
+  // error message.
+  win.webContents.on('did-finish-load', () => {
+    debugLog('did-finish-load');
+    pushSessions();
+    claudeCli.resolve({ override: config.get().claudeBin }).then((cli) => {
+      debugLog('claudeCli.resolve ->', JSON.stringify(cli));
+      if (!win || win.isDestroyed()) return;
+      try {
+        win.webContents.send('claude-info', cli);
+      } catch {}
+      if (cli.found) return;
+      win.webContents.send('app-warning', {
+        kind: 'claude-missing',
+        message:
+          cli.source === 'config-broken'
+            ? `Configured Claude Code path didn't answer: ${cli.path}`
+            : "Claude Code CLI not found on this machine's PATH — sessions can't be started.",
+      });
+    });
+  });
+  unwatch = sessions.watch(pushSessions);
+  unpollUsage = usage.poll(pushUsage);
+
+  // Coming back to the window is when a stale number is most likely to mislead. The
+  // refresh floor inside usage.js is what keeps alt-tabbing from turning into traffic.
+  win.on('focus', () => usage.refresh().then(pushUsage));
+
+  win.on('closed', () => {
+    debugLog(`window closed, killing ${ptys.size} pty(s)`);
+    if (unwatch) unwatch();
+    if (unpollUsage) unpollUsage();
+    for (const proc of ptys.values()) proc.kill();
+    ptys.clear();
+    win = null;
+  });
+}
+
+// ipcMain.handle/on register one handler per channel for the app's whole lifetime —
+// calling handle() twice for the same channel throws. createWindow() runs again on
+// macOS whenever the window is closed and the dock icon reopens it (see the 'activate'
+// handler below), so these must be registered exactly once, not once per window.
+function registerIpcHandlers() {
   ipcMain.handle('pty-create', (event, opts) => spawnTab(opts || {}));
 
   ipcMain.on('pty-input', (event, { tabId, data }) => {
@@ -287,50 +331,13 @@ function createWindow() {
     pushSessions();
     return result;
   });
-
-  // Find the CLI before anyone can click New session. If it isn't there, say so in the one
-  // place the user is already looking — spawning a tab that dies at exit 127 is not an
-  // error message.
-  win.webContents.on('did-finish-load', () => {
-    debugLog('did-finish-load');
-    pushSessions();
-    claudeCli.resolve({ override: config.get().claudeBin }).then((cli) => {
-      debugLog('claudeCli.resolve ->', JSON.stringify(cli));
-      if (!win || win.isDestroyed()) return;
-      try {
-        win.webContents.send('claude-info', cli);
-      } catch {}
-      if (cli.found) return;
-      win.webContents.send('app-warning', {
-        kind: 'claude-missing',
-        message:
-          cli.source === 'config-broken'
-            ? `Configured Claude Code path didn't answer: ${cli.path}`
-            : "Claude Code CLI not found on this machine's PATH — sessions can't be started.",
-      });
-    });
-  });
-  unwatch = sessions.watch(pushSessions);
-  unpollUsage = usage.poll(pushUsage);
-
-  // Coming back to the window is when a stale number is most likely to mislead. The
-  // refresh floor inside usage.js is what keeps alt-tabbing from turning into traffic.
-  win.on('focus', () => usage.refresh().then(pushUsage));
-
-  win.on('closed', () => {
-    debugLog(`window closed, killing ${ptys.size} pty(s)`);
-    if (unwatch) unwatch();
-    if (unpollUsage) unpollUsage();
-    for (const proc of ptys.values()) proc.kill();
-    ptys.clear();
-    win = null;
-  });
 }
 
 app.whenReady().then(() => {
   // Before the window, because autoname and the usage poller both read settings the moment
   // the first session push happens.
   config.init(app.getPath('userData'));
+  registerIpcHandlers();
   createWindow();
 });
 

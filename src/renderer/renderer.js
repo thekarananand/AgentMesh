@@ -1752,13 +1752,11 @@ function render() {
   // No folder chosen means nothing to scope to, and an empty list would be a dead end —
   // the welcome pane is where you go to start something, so it shows everything.
   scopedDir = projectOnly ? windowDir : null;
-  // A tab this window hosts is never scope-filtered out, even when its folder isn't the
-  // scoped one — the header no longer follows the active tab (see setActive), so looking
-  // at an agent running elsewhere must not make its own card, close button and rename
-  // disappear out from under it.
-  const visible = scopedDir
-    ? rows.filter((r) => r.cwd === scopedDir || (r.tabId && tabs.has(r.tabId)))
-    : rows;
+  // Strictly by folder, no exceptions — including a tab this window itself hosts. The
+  // header no longer follows the active tab (see setActive), so a hosted row can end up
+  // outside the current scope; it still disappears, card and close button with it, until
+  // the window is pointed back at that folder or scoping is turned off (#filter/moreEl).
+  const visible = scopedDir ? rows.filter((r) => r.cwd === scopedDir) : rows;
   syncFilterChip();
   syncTabs(visible);
 
@@ -1771,11 +1769,15 @@ function render() {
   for (const id of tabNodes.keys()) if (!tabs.has(id)) tabNodes.delete(id);
 
   // Tabs we host that no row claims — they belong at the top of RUNNING, because they
-  // are the most running thing on the list: this window is looking at them.
+  // are the most running thing on the list: this window is looking at them. Same strict
+  // folder rule as `visible` above: a FleetView tab or a session too young to have
+  // registered a row yet is still scope-filtered by its own cwd.
   const claimed = new Set(rows.map((r) => r.tabId).filter(Boolean));
   const orphanTabs = [];
   for (const [tabId, tab] of tabs) {
-    if (!claimed.has(tabId)) orphanTabs.push(tabRowNode(tabId, tab));
+    if (!claimed.has(tabId) && (!scopedDir || tab.cwd === scopedDir)) {
+      orphanTabs.push(tabRowNode(tabId, tab));
+    }
   }
 
   // How many sessions the scope is holding back. Zero when unscoped, and the control is
