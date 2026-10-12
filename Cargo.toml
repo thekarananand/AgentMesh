@@ -1,0 +1,24 @@
+[package]
+name = "claude-control-plane"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+# Zed's fork (Apache-2.0): PTY + escape-sequence parsing + grid. Same rev Zed pins.
+alacritty_terminal = { git = "https://github.com/zed-industries/alacritty", rev = "4c129667ce56611becdc82de6e28218c80e2e88f" }
+futures = "0.3"
+gpui = { git = "https://github.com/zed-industries/zed", rev = "93d745668805029476e6d7fbb19652116fed51de" }
+# font-kit: real macOS text system (without it, no text renders).
+# runtime_shaders: compile Metal shaders at launch, so building needs no full Xcode.
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "93d745668805029476e6d7fbb19652116fed51de", features = ["font-kit", "runtime_shaders"] }
+libc = "0.2"
+log = "0.4"
+serde_json = "1.0"
+shlex = "2.0"
+
+# Same forks Zed's workspace patches in; gpui builds against them.
+[patch.crates-io]
+async-process = { git = "https://github.com/zed-industries/async-process.git", rev = "0b6d6713570af61806e1e5cb40e0f757cb93fd9d" }
+async-task = { git = "https://github.com/zed-industries/async-task.git", rev = "015845a19fc31752c02367567d3b8900a406f9da" }
+calloop = { git = "https://github.com/zed-industries/calloop", rev = "3759371fee14c40066d64777e2a36b6ffcc22590" }
