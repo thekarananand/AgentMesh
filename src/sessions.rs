@@ -1,5 +1,5 @@
-//! Reads Claude Code's own records under `~/.claude` into one row per session.
-//! Read-only: Claude Code owns all of this state. Unknown or unparseable data degrades, never errors.
+//! Reads the agent CLI's own records under `~/.claude` into one row per session.
+//! Read-only: the agent CLI owns all of this state. Unknown or unparseable data degrades, never errors.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -21,7 +21,7 @@ const TITLE_MAX: usize = 120;
 const PROMPT_MAX: usize = 200;
 /// Ended sessions shown under HISTORY at first; "Show more" adds this many each time.
 pub const RECENT_LIMIT: usize = 40;
-/// Claude Code truncates longer project slugs and appends a hash.
+/// The agent CLI truncates longer project slugs and appends a hash.
 const SLUG_MAX: usize = 200;
 const SOCKET_TIMEOUT: Duration = Duration::from_secs(1);
 
@@ -42,11 +42,11 @@ pub struct Row {
     pub background: bool,
     pub cwd: PathBuf,
     pub branch: Option<String>,
-    /// Deliberate name (not Claude Code's cwd-derived autoname).
+    /// Deliberate name (not the agent CLI's cwd-derived autoname).
     pub name: Option<String>,
     /// The name in the pid file right now, whatever its source.
     pub live_name: Option<String>,
-    /// Claude Code's own summary title; it never promotes it to the name.
+    /// The agent CLI's own summary title; it never promotes it to the name.
     pub ai_title: Option<String>,
     pub first_prompt: Option<String>,
     /// Control socket of a live session (accepts rename).
@@ -105,14 +105,14 @@ pub fn home_dir() -> PathBuf {
     std::env::home_dir().unwrap_or_else(|| "/".into())
 }
 
-fn claude_dir() -> PathBuf {
+fn agent_home() -> PathBuf {
     home_dir().join(".claude")
 }
 
-/// Where Claude Code keeps one pid file per running session, symlinks resolved (FSEvents
+/// Where the agent CLI keeps one pid file per running session, symlinks resolved (FSEvents
 /// reports real paths).
 pub(crate) fn sessions_dir() -> PathBuf {
-    let dir = claude_dir().join("sessions");
+    let dir = agent_home().join("sessions");
     fs::canonicalize(&dir).unwrap_or(dir)
 }
 
@@ -120,7 +120,7 @@ pub(crate) fn sessions_dir() -> PathBuf {
 /// At most `limit` ended sessions.
 pub fn list(folder: &Path, limit: usize, cache: &mut Cache) -> Vec<Row> {
     let folder = &fs::canonicalize(folder).unwrap_or_else(|_| folder.to_path_buf());
-    let dir = claude_dir();
+    let dir = agent_home();
     let live = read_live(&dir.join("sessions"));
     let transcripts = project_transcripts(&dir.join("projects"), folder);
     cache.prompts.refresh(&dir.join("history.jsonl"), folder);
@@ -175,7 +175,7 @@ pub fn list(folder: &Path, limit: usize, cache: &mut Cache) -> Vec<Row> {
 
 /// Whether the session is running right now, read fresh (the polled rows can be 2s old).
 pub fn is_live(session_id: &str) -> bool {
-    read_live(&claude_dir().join("sessions"))
+    read_live(&agent_home().join("sessions"))
         .iter()
         .any(|entry| entry.id == session_id)
 }
@@ -248,7 +248,7 @@ fn inside(path: &Path, folder: &Path) -> bool {
     path.starts_with(folder) || fs::canonicalize(path).is_ok_and(|path| path.starts_with(folder))
 }
 
-/// Claude Code's session ids are UUIDs. Anything else in a project dir (legacy `agent-*` files,
+/// The agent CLI's session ids are UUIDs. Anything else in a project dir (legacy `agent-*` files,
 /// a stem starting with `-` that `--resume` would read as a flag) is not resumable.
 pub fn is_session_id(id: &str) -> bool {
     id.len() == 36
@@ -311,7 +311,7 @@ fn read_live(dir: &Path) -> Vec<LiveEntry> {
 fn parse_live(json: &Value) -> Option<LiveEntry> {
     let pid = json["pid"].as_u64().and_then(valid_pid)?;
     let id = json["sessionId"].as_str()?;
-    // `derived` (cwd-based) and `collision` are Claude Code's own placeholders.
+    // `derived` (cwd-based) and `collision` are the agent CLI's own placeholders.
     let deliberate = !matches!(json["nameSource"].as_str(), Some("derived" | "collision"));
     let live_name = json["name"]
         .as_str()
@@ -381,7 +381,7 @@ fn process_start(_: u32) -> Option<u64> {
     None
 }
 
-/// Claude Code's directory name for a project: every non-alphanumeric UTF-16 unit becomes `-`
+/// The agent CLI's directory name for a project: every non-alphanumeric UTF-16 unit becomes `-`
 /// (a JS regex replace), so an emoji outside the BMP becomes two.
 fn project_slug(folder: &Path) -> String {
     folder
@@ -556,7 +556,7 @@ impl Prompts {
     }
 }
 
-/// Name guess in Claude Code's own style: kebab-case, at most 4 words.
+/// Name guess in the agent CLI's own style: kebab-case, at most 4 words.
 pub fn kebab_name(text: &str) -> Option<String> {
     let words: Vec<String> = text
         .split(|c: char| !c.is_alphanumeric())
@@ -574,7 +574,7 @@ pub fn nameable_prompt(prompt: &str) -> Option<&str> {
         .then_some(prompt)
 }
 
-/// Renames a live session over its control socket. Claude Code updates its banner, terminal
+/// Renames a live session over its control socket. the agent CLI updates its banner, terminal
 /// title, pid file and transcript itself. No ack; the next poll shows the result.
 pub fn rename(socket: &Path, session_id: &str, name: &str) -> std::io::Result<()> {
     let message = serde_json::json!({
@@ -676,12 +676,10 @@ mod tests {
     }
 
     #[test]
-    fn slug_matches_claude_code() {
+    fn slug_matches_agent_cli() {
         assert_eq!(
-            project_slug(Path::new(
-                "/Users/me/Desktop/AgentMesh-v2/code/Claude_Plane"
-            )),
-            "-Users-me-Desktop-AgentMesh-v2-code-Claude-Plane"
+            project_slug(Path::new("/Users/me/Desktop/AgentMesh-v2/code/Agent_Plane")),
+            "-Users-me-Desktop-AgentMesh-v2-code-Agent-Plane"
         );
         // JS replaces per UTF-16 unit: one for é, two for an emoji.
         assert_eq!(
@@ -701,7 +699,7 @@ mod tests {
         assert!(entry.background);
         assert_eq!(entry.name.as_deref(), Some("fix-login"));
         assert_eq!(entry.updated, Some(UNIX_EPOCH + Duration::from_secs(1)));
-        // Claude Code's placeholder names are not deliberate; unknown statuses mean working.
+        // The agent CLI's placeholder names are not deliberate; unknown statuses mean working.
         let entry = parse_live(&serde_json::json!({
             "pid": 1, "sessionId": "s", "status": "thinking", "name": "p", "nameSource": "derived",
         }))

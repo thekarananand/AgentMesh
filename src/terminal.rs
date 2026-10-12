@@ -1,4 +1,4 @@
-//! One PTY running one `claude` process, rendered as a GPUI grid.
+//! One PTY running one `agent` process, rendered as a GPUI grid.
 
 use std::{borrow::Cow, path::PathBuf, sync::Arc};
 
@@ -26,7 +26,7 @@ use gpui::{
     rgb, rgba, size,
 };
 
-use crate::{glyphs, launch::Claude};
+use crate::{glyphs, launch::AgentCli};
 
 pub const FONT_FAMILY: &str = "JetBrainsMono Nerd Font Mono";
 pub const FONT_SIZE: Pixels = px(14.);
@@ -81,10 +81,10 @@ const WHEEL_DOWN: u8 = 65;
 /// Legacy encoding offsets every byte by 32 so it stays printable.
 const COORD_OFFSET: usize = 32;
 
-/// What a tab runs: `claude` plus arguments, in a folder.
+/// What a tab runs: `agent` plus arguments, in a folder.
 #[derive(Clone, Debug)]
 pub struct Launch {
-    pub claude: Claude,
+    pub agent: AgentCli,
     pub args: Vec<String>,
     pub cwd: PathBuf,
 }
@@ -102,7 +102,7 @@ pub struct Layout {
 }
 
 pub enum TerminalEvent {
-    /// `claude` exited; the tab should close. `code` is None when a signal ended it.
+    /// `agent` exited; the tab should close. `code` is None when a signal ended it.
     Exited {
         code: Option<i32>,
         /// Last non-empty screen line: usually why a launch failed.
@@ -125,7 +125,7 @@ impl EventListener for Listener {
 pub struct Terminal {
     term: Arc<FairMutex<Term<Listener>>>,
     pty: Notifier,
-    /// The pty's child. Because of `exec`, this is the `claude` process itself.
+    /// The pty's child. Because of `exec`, this is the `agent` process itself.
     pub pid: u32,
     layout: Layout,
     scroll_remainder: f32,
@@ -161,28 +161,28 @@ impl Focusable for Terminal {
 }
 
 impl Drop for Terminal {
-    /// Stops the PTY thread; dropping its `Pty` sends claude SIGHUP.
+    /// Stops the PTY thread; dropping its `Pty` sends agent SIGHUP.
     fn drop(&mut self) {
         self.pty.0.send(Msg::Shutdown).ok();
     }
 }
 
 impl Terminal {
-    /// Starts `claude` in a PTY: the login shell loads the user's PATH and toolchain, then `exec`
-    /// replaces it with claude, so there is no bare shell prompt to fall back to.
+    /// Starts `agent` in a PTY: the login shell loads the user's PATH and toolchain, then `exec`
+    /// replaces it with agent, so there is no bare shell prompt to fall back to.
     pub fn spawn(launch: &Launch, layout: Layout) -> Result<Spawned, String> {
-        // The child ignores a failed `chdir` and would run claude wherever this app runs.
+        // The child ignores a failed `chdir` and would run agent wherever this app runs.
         if !launch.cwd.is_dir() {
             return Err(format!("{} no longer exists", launch.cwd.display()));
         }
-        // claude itself, with the login shell's environment: no shell parses the arguments.
+        // agent itself, with the login shell's environment: no shell parses the arguments.
         let options = tty::Options {
             shell: Some(Shell::new(
-                launch.claude.path.to_string_lossy().into_owned(),
+                launch.agent.path.to_string_lossy().into_owned(),
                 launch.args.clone(),
             )),
             working_directory: Some(launch.cwd.clone()),
-            env: launch.claude.env.clone(),
+            env: launch.agent.env.clone(),
             ..Default::default()
         };
         let pty = tty::new(&options, window_size(&layout), 0)
@@ -216,7 +216,7 @@ impl Terminal {
             events: events_rx,
         } = spawned;
         let events = cx.spawn(async move |this, cx| {
-            // Everything queued since the last turn is handled in one update: a busy claude
+            // Everything queued since the last turn is handled in one update: a busy agent
             // sends a wakeup per PTY read.
             let mut batches = events_rx.ready_chunks(EVENT_BATCH);
             while let Some(batch) = batches.next().await {
@@ -350,7 +350,7 @@ impl Terminal {
     }
 
     /// Cmd-K: drops the scrollback. The screen stays: clearing it under a running full-screen
-    /// program (claude) would leave it blank until the program redraws.
+    /// program (agent) would leave it blank until the program redraws.
     fn clear(&mut self, _: &Clear, _: &mut Window, cx: &mut Context<Self>) {
         let mut term = self.term.lock();
         term.selection = None;
@@ -512,7 +512,7 @@ impl Terminal {
         }
     }
 
-    /// Called for every tab, hidden ones too, so a background claude redraws at the right width.
+    /// Called for every tab, hidden ones too, so a background agent redraws at the right width.
     pub fn set_layout(&mut self, layout: Layout) {
         let resized = (layout.columns, layout.rows) != (self.layout.columns, self.layout.rows);
         self.layout = layout;
@@ -548,7 +548,7 @@ struct GlyphRun {
 }
 
 impl GlyphRun {
-    /// Glyphs that tile horizontally: a run of them is the same glyph drawn wider. Claude Code
+    /// Glyphs that tile horizontally: a run of them is the same glyph drawn wider. the agent CLI
     /// draws whole-width rules and bars with these.
     const TILES: [char; 8] = ['─', '━', '═', '█', '▀', '▄', '▔', '▁'];
 
@@ -898,7 +898,7 @@ fn cell_colors(
         fg = Color::Named(named.to_bright());
     }
     let mut fg = resolve(fg, colors);
-    // Faint (SGR 2): Claude Code draws its prompt suggestions this way.
+    // Faint (SGR 2): the agent CLI draws its prompt suggestions this way.
     if cell.flags.intersects(Flags::DIM) {
         fg = dim(fg);
     }
@@ -977,7 +977,7 @@ fn mouse_report(
 /// Bytes for a key press, or None when it isn't typed (Cmd shortcuts, unmapped keys).
 ///
 /// Option is Meta for ASCII letters, digits and named keys (`ESC` + key, like iTerm's "Esc+"):
-/// Claude Code and readline use Meta for word motion. Option with punctuation still types what
+/// The agent CLI and readline use Meta for word motion. Option with punctuation still types what
 /// the OS composes. Trade-off: layouts that need Option+letter for a character (German `@` =
 /// Option-L) can't type it here; fine on the U.S. layout this is built for.
 fn key_bytes(
@@ -1015,7 +1015,7 @@ fn key_bytes(
         _ => csi(code),
     };
     let bytes = match key {
-        // Claude Code reads ESC CR as Option+Enter: a newline instead of submit.
+        // The agent CLI reads ESC CR as Option+Enter: a newline instead of submit.
         "enter" if modifiers.shift || modifiers.control || modifiers.alt => meta(b"\r"),
         "enter" => b"\r".to_vec(),
         "backspace" if modifiers.alt => meta(b"\x7f"),
@@ -1195,13 +1195,13 @@ fn paste_bytes(text: &str) -> String {
 mod tests {
     use super::*;
 
-    /// Debug aid, not a check: runs the real `claude` in a headless `Term` and prints the bottom
-    /// rows with their colors. `cargo test dump_claude_screen -- --ignored --nocapture`.
+    /// Debug aid, not a check: runs the real `agent` in a headless `Term` and prints the bottom
+    /// rows with their colors. `cargo test dump_agent_screen -- --ignored --nocapture`.
     #[test]
     #[ignore]
-    fn dump_claude_screen() {
+    fn dump_agent_screen() {
         use std::time::{Duration, Instant};
-        let claude = crate::launch::resolve().unwrap();
+        let agent = crate::launch::resolve().unwrap();
         let layout = Layout {
             columns: 100,
             rows: 30,
@@ -1212,11 +1212,11 @@ mod tests {
         };
         let options = tty::Options {
             shell: Some(Shell::new(
-                claude.path.to_string_lossy().into_owned(),
+                agent.path.to_string_lossy().into_owned(),
                 Vec::new(),
             )),
             working_directory: std::env::current_dir().ok(),
-            env: claude.env.clone(),
+            env: agent.env.clone(),
             ..Default::default()
         };
         let pty = tty::new(&options, window_size(&layout), 0).unwrap();

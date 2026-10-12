@@ -1,4 +1,4 @@
-//! Log lines go to `~/Library/Logs/ClaudeControlPlane.log` as well as stderr: launched from
+//! Log lines go to `~/Library/Logs/AgentMesh.log` as well as stderr: launched from
 //! Finder or the Dock, stderr goes nowhere. Console.app opens the file from its Log Reports.
 
 use std::{
@@ -46,7 +46,7 @@ impl log::Log for Logger {
 }
 
 pub fn init() {
-    let path = sessions::home_dir().join("Library/Logs/ClaudeControlPlane.log");
+    let path = sessions::home_dir().join("Library/Logs/AgentMesh.log");
     if fs::metadata(&path).is_ok_and(|meta| meta.len() > MAX_LOG_BYTES) {
         fs::remove_file(&path).ok();
     }

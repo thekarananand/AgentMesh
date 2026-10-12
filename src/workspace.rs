@@ -1,4 +1,4 @@
-//! One window's state: its project folder, its tabs (one `claude` each) and the project's sessions.
+//! One window's state: its project folder, its tabs (one `agent` each) and the project's sessions.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -21,7 +21,7 @@ use gpui::{
 use crate::{
     autoname::{self, Given},
     input::{self, Edit},
-    launch::{self, Claude},
+    launch::{self, AgentCli},
     prefs::{self, Prefs},
     sessions::{self, Row, Status},
     sidebar::Sidebar,
@@ -33,7 +33,7 @@ use crate::{
     watch, window,
 };
 
-/// Sessions are re-read this often. Claude Code rewrites its pid files on every status flip.
+/// Sessions are re-read this often. the agent CLI rewrites its pid files on every status flip.
 const POLL: Duration = Duration::from_secs(2);
 /// With the pid-file watcher running, status flips arrive as events; the poll only catches
 /// what isn't watched (transcript titles, first prompts).
@@ -73,7 +73,7 @@ pub type TabId = u64;
 pub struct Tab {
     pub id: TabId,
     pub view: Entity<Terminal>,
-    /// The pty child; because of `exec`, the `claude` process. Binds the tab to its session.
+    /// The pty child; because of `exec`, the `agent` process. Binds the tab to its session.
     pub pid: u32,
     /// Session this tab was spawned to resume, so a second click refocuses instead of spawning
     /// again before the session registers. Cleared once the tab is bound.
@@ -130,8 +130,8 @@ pub struct Workspace {
     by_pid: HashMap<u32, usize>,
     /// Names this app gave its sessions.
     autonamed: HashMap<String, Given>,
-    /// None while the login shell is still being asked; Err says why there is no claude.
-    pub(crate) claude: Option<Result<Claude, String>>,
+    /// None while the login shell is still being asked; Err says why there is no agent.
+    pub(crate) agent: Option<Result<AgentCli, String>>,
     /// Why the last New or resume failed to start.
     pub(crate) launch_error: Option<String>,
     /// Cmd is down: every tab shows its Cmd-N shortcut.
@@ -260,7 +260,7 @@ impl Workspace {
             rows: Vec::new(),
             by_pid: HashMap::new(),
             autonamed: HashMap::new(),
-            claude: None,
+            agent: None,
             launch_error: None,
             cmd_held: false,
             title_drag: false,
@@ -292,31 +292,31 @@ impl Workspace {
         }
     }
 
-    /// Asks the login shell for claude. Separate from the poll: History shows while a slow
+    /// Asks the login shell for agent. Separate from the poll: History shows while a slow
     /// login shell is still starting.
     fn resolve_task(cx: &mut Context<Self>) -> Task<()> {
         cx.spawn(async move |this, cx| {
-            let claude = cx
+            let agent = cx
                 .background_executor()
                 .spawn(async { launch::resolve() })
                 .await;
-            if let Err(error) = &claude {
-                log::warn!("resolve claude: {error}");
+            if let Err(error) = &agent {
+                log::warn!("resolve agent: {error}");
             }
             this.update(cx, |this, cx| {
-                this.claude = Some(claude);
+                this.agent = Some(agent);
                 cx.notify();
             })
             .ok();
         })
     }
 
-    /// Looks for claude again, e.g. after the user installed it. No relaunch needed.
+    /// Looks for agent again, e.g. after the user installed it. No relaunch needed.
     pub(crate) fn retry_resolve(&mut self, cx: &mut Context<Self>) {
-        if self.claude.is_none() {
+        if self.agent.is_none() {
             return;
         }
-        self.claude = None;
+        self.agent = None;
         self._resolve = Self::resolve_task(cx);
         cx.notify();
     }
@@ -715,11 +715,11 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(Ok(claude)) = self.claude.clone() else {
+        let Some(Ok(agent)) = self.agent.clone() else {
             return;
         };
         let launch = Launch {
-            claude,
+            agent,
             args,
             cwd: self.folder.clone(),
         };
@@ -738,7 +738,7 @@ impl Workspace {
         let pid = view.read(cx).pid;
         let id = self.next_id;
         self.next_id += 1;
-        // Quitting claude closes its tab; a tab never lingers at a bare shell prompt.
+        // Quitting agent closes its tab; a tab never lingers at a bare shell prompt.
         let subscription =
             cx.subscribe_in(
                 &view,
@@ -768,7 +768,7 @@ impl Workspace {
     }
 
     pub(crate) fn new_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if matches!(self.claude, Some(Err(_))) {
+        if matches!(self.agent, Some(Err(_))) {
             return self.retry_resolve(cx);
         }
         self.spawn_tab(Vec::new(), None, window, cx);
@@ -817,8 +817,8 @@ impl Workspace {
         if quick || code != Some(0) {
             let how = code.map_or("stopped by a signal".into(), |code| format!("code {code}"));
             self.launch_error = Some(match last_line {
-                Some(line) => format!("claude exited ({how}): {line}"),
-                None => format!("claude exited ({how})."),
+                Some(line) => format!("agent exited ({how}): {line}"),
+                None => format!("agent exited ({how})."),
             });
         }
         self.close_tab(id, window, cx);
@@ -942,7 +942,7 @@ impl Workspace {
         let Some(index) = self.tabs.iter().position(|tab| tab.id == id) else {
             return;
         };
-        // Dropping the view stops the PTY; alacritty's `Pty` drop sends SIGHUP and reaps claude.
+        // Dropping the view stops the PTY; alacritty's `Pty` drop sends SIGHUP and reaps agent.
         self.tabs.remove(index);
         if self
             .renaming
@@ -981,7 +981,7 @@ impl Workspace {
             return;
         }
         let mut args = vec!["--resume".into(), row.id.clone()];
-        // Only a deliberate name; otherwise claude mints a fresh autoname.
+        // Only a deliberate name; otherwise agent mints a fresh autoname.
         if let Some(name) = &row.name {
             args.extend(["--name".into(), name.clone()]);
         }

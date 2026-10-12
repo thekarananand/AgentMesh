@@ -1,5 +1,5 @@
 //! Picks a name for a tab's session as early as possible: from the first prompt as soon as it is
-//! sent, then once more from Claude Code's AI title when that lands. A name the user set (anything
+//! sent, then once more from the agent CLI's AI title when that lands. A name the user set (anything
 //! other than the one we sent) is never touched.
 
 use crate::sessions::{self, Row};

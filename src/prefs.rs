@@ -1,5 +1,5 @@
 //! View choices that survive a relaunch, in
-//! `~/Library/Application Support/ClaudeControlPlane/prefs.json`. This app's own file: nothing is
+//! `~/Library/Application Support/AgentMesh/prefs.json`. This app's own file: nothing is
 //! written under `~/.claude`. Missing or unreadable means defaults.
 
 use std::{fs, path::PathBuf};
@@ -45,7 +45,7 @@ pub fn update(cx: &mut App, change: impl FnOnce(&mut Prefs)) {
 }
 
 fn path() -> PathBuf {
-    sessions::home_dir().join("Library/Application Support/ClaudeControlPlane/prefs.json")
+    sessions::home_dir().join("Library/Application Support/AgentMesh/prefs.json")
 }
 
 pub fn load() -> Prefs {

@@ -165,7 +165,7 @@ impl Workspace {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let can_spawn = matches!(self.claude, Some(Ok(_)));
+        let can_spawn = matches!(self.agent, Some(Ok(_)));
         let open_tip = with_shortcut("Open project", &OpenProject, window);
         let new_tip = with_shortcut("New session", &NewSession, window);
         // Buttons stop the press so it doesn't arm a window drag.
@@ -589,7 +589,7 @@ impl Workspace {
 
     /// Why New does nothing (with Retry), or why the last launch failed (dismissable).
     fn render_problem(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
-        let (message, action) = match (&self.claude, &self.launch_error) {
+        let (message, action) = match (&self.agent, &self.launch_error) {
             (Some(Err(error)), _) => (error.clone(), "Retry"),
             (_, Some(error)) => (error.clone(), "Dismiss"),
             _ => return None,
@@ -620,7 +620,7 @@ impl Workspace {
                         .active(|style| style.bg(rgba(PRESSED)))
                         .child(action)
                         .on_click(cx.listener(|this, _, _, cx| {
-                            if matches!(this.claude, Some(Err(_))) {
+                            if matches!(this.agent, Some(Err(_))) {
                                 this.retry_resolve(cx);
                             } else {
                                 this.launch_error = None;
@@ -637,13 +637,13 @@ impl Workspace {
             Some(key) => format!("{key} opens another project"),
             None => "File \u{203a} Open Project opens another project".into(),
         };
-        let message = match &self.claude {
+        let message = match &self.agent {
             Some(Ok(_)) => format!("New session in {}", folder_name(&self.folder)),
-            None => "Looking for claude\u{2026}".to_string(),
-            Some(Err(_)) => "Claude Code not found: look again".to_string(),
+            None => "Looking for agent\u{2026}".to_string(),
+            Some(Err(_)) => "Agent CLI not found: look again".to_string(),
         };
         // Looking: nothing to click yet. Not found: the click looks again.
-        let enabled = self.claude.is_some();
+        let enabled = self.agent.is_some();
         div()
             .flex_1()
             .flex()

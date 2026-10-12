@@ -1,4 +1,4 @@
-//! Wakes the session poll when Claude Code writes a pid file, so a status flip (busy, waiting,
+//! Wakes the session poll when the agent CLI writes a pid file, so a status flip (busy, waiting,
 //! idle) shows within ~100 ms instead of at the next 2 s poll. FSEvents, called directly: no
 //! crate in the lock wraps it. Any failure leaves the poll alone, which still works.
 
@@ -142,8 +142,7 @@ impl Watcher {
                 return None;
             }
             // From here the stream owns `info` and frees it through `release_info`.
-            let queue =
-                dispatch_queue_create(c"claude-control-plane.watch".as_ptr(), std::ptr::null());
+            let queue = dispatch_queue_create(c"agentmesh.watch".as_ptr(), std::ptr::null());
             FSEventStreamSetDispatchQueue(stream, queue);
             let watcher = Self { stream, queue };
             (FSEventStreamStart(stream) != 0).then_some(watcher)

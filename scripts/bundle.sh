@@ -7,7 +7,7 @@ cargo build --release
 APP=target/release/bundle/AgentMesh.app
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp target/release/claude-control-plane "$APP/Contents/MacOS/AgentMesh"
+cp target/release/agentmesh "$APP/Contents/MacOS/AgentMesh"
 
 # assets/icon.png is rendered from assets/icon.svg (brew install resvg)
 if command -v resvg >/dev/null; then resvg -w 1024 -h 1024 assets/icon.svg assets/icon.png; fi

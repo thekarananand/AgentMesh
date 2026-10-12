@@ -25,8 +25,8 @@ pub fn initial_folder() -> PathBuf {
     canonical(folder)
 }
 
-/// The one spelling of a project folder: absolute, symlinks resolved, no trailing slash. Claude
-/// Code records the real path, and one-window-per-project compares folders with `==`.
+/// The one spelling of a project folder: absolute, symlinks resolved, no trailing slash. The agent CLI
+/// records the real path, and one-window-per-project compares folders with `==`.
 pub fn canonical(folder: PathBuf) -> PathBuf {
     fs::canonicalize(&folder).unwrap_or(folder)
 }

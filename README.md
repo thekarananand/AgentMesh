@@ -2,16 +2,16 @@
 
 # AgentMesh
 
-A control plane for running many Claude Code agents at once, in a native macOS app.
+A control plane for running many coding agents at once, in a native macOS app.
 
-One window per project. Each tab is a real terminal (PTY) running its own `claude`. The sidebar lists open tabs and the project's session history.
+One window per project. Each tab is a real terminal (PTY) running its own agent CLI. The sidebar lists open tabs and the project's session history.
 
 Built in Rust on [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui) (Zed's UI framework) with `alacritty_terminal` for the terminal emulation.
 
 ## Requirements
 
 - macOS 12+ on Apple Silicon or Intel
-- [Claude Code](https://claude.com/claude-code) (`claude`) on your `PATH`
+- An agent CLI on your `PATH` (the app launches `claude`)
 - Rust via [rustup](https://rustup.rs) (the pinned toolchain installs itself)
 - `cmake` (`brew install cmake`)
 - Xcode Command Line Tools (`xcode-select --install`). Full Xcode is not needed: shaders are compiled at launch (`runtime_shaders`).
@@ -40,8 +40,8 @@ The app is ad-hoc signed, not notarized. If macOS blocks a copy you downloaded, 
 
 ## Files
 
-- Logs: `~/Library/Logs/ClaudeControlPlane.log`
-- Preferences: `~/Library/Application Support/ClaudeControlPlane/prefs.json`
+- Logs: `~/Library/Logs/AgentMesh.log`
+- Preferences: `~/Library/Application Support/AgentMesh/prefs.json`
 
 ## Troubleshooting
 

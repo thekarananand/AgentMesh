@@ -1,6 +1,6 @@
-//! Finding `claude` and the environment to run it in. The user's login shell is asked once per
-//! window; tabs then start `claude` directly with that environment, so no shell parses their
-//! arguments (fish and csh quote differently) and no shell stays between the tab and claude.
+//! Finding `agent` and the environment to run it in. The user's login shell is asked once per
+//! window; tabs then start `agent` directly with that environment, so no shell parses their
+//! arguments (fish and csh quote differently) and no shell stays between the tab and agent.
 
 use std::{
     collections::HashMap,
@@ -17,22 +17,22 @@ const RESOLVE_TIMEOUT: Duration = Duration::from_secs(10);
 /// After the login shell exits, how long its output may stay silent before reading stops.
 const OUTPUT_GRACE: Duration = Duration::from_millis(200);
 /// Printed between the lookup and the environment.
-const MARKER: &str = "__claude_control_plane_env__";
+const MARKER: &str = "__agentmesh_env__";
 /// Variables describing the asking shell, not the tab: its working directory and depth.
 const SHELL_ONLY_ENV: [&str; 4] = ["PWD", "OLDPWD", "SHLVL", "_"];
 /// What tabs advertise. The grid is alacritty's, but `alacritty` terminfo isn't installed
-/// everywhere and claude would take the tab for an Alacritty window.
+/// everywhere and agent would take the tab for an Alacritty window.
 const TAB_ENV: [(&str, &str); 2] = [("TERM", "xterm-256color"), ("COLORTERM", "truecolor")];
 
-/// `claude` and the environment the user's login shell gives it.
+/// `agent` and the environment the user's login shell gives it.
 #[derive(Clone, Debug)]
-pub struct Claude {
+pub struct AgentCli {
     pub path: PathBuf,
     pub env: HashMap<String, String>,
 }
 
-/// Asks the login shell for `claude` and its environment. The error says why, for the sidebar.
-pub fn resolve() -> Result<Claude, String> {
+/// Asks the login shell for `agent` and its environment. The error says why, for the sidebar.
+pub fn resolve() -> Result<AgentCli, String> {
     let shell = login_shell();
     let csh = Path::new(&shell)
         .file_name()
@@ -75,9 +75,9 @@ pub fn resolve() -> Result<Claude, String> {
     parse_output(&collect_output(&output))
 }
 
-/// The shell's output: banners and the claude path, the marker, then `env -0`.
-fn parse_output(lines: &[String]) -> Result<Claude, String> {
-    let not_found = || "Claude Code not found on the login shell's PATH.".to_string();
+/// The shell's output: banners and the agent path, the marker, then `env -0`.
+fn parse_output(lines: &[String]) -> Result<AgentCli, String> {
+    let not_found = || "Agent CLI not found on the login shell's PATH.".to_string();
     let marker = lines
         .iter()
         .position(|line| line == MARKER)
@@ -99,7 +99,7 @@ fn parse_output(lines: &[String]) -> Result<Claude, String> {
         .map(|(name, value)| (name.to_string(), value.to_string()))
         .chain(TAB_ENV.map(|(name, value)| (name.to_string(), value.to_string())))
         .collect();
-    Ok(Claude {
+    Ok(AgentCli {
         path: PathBuf::from(path),
         env,
     })
@@ -151,21 +151,21 @@ mod tests {
     fn output_gives_path_and_env() {
         let lines: Vec<String> = [
             "Welcome banner",
-            "/opt/bin/claude",
+            "/opt/bin/agent",
             MARKER,
             "PATH=/opt/bin:/usr/bin\0MULTI=a",
             "b\0PWD=/somewhere\0TERM=alacritty\0",
         ]
         .map(String::from)
         .to_vec();
-        let claude = parse_output(&lines).unwrap();
-        assert_eq!(claude.path, Path::new("/opt/bin/claude"));
-        assert_eq!(claude.env["PATH"], "/opt/bin:/usr/bin");
-        assert_eq!(claude.env["MULTI"], "a\nb");
-        assert_eq!(claude.env["TERM"], "xterm-256color");
-        assert!(!claude.env.contains_key("PWD"));
+        let agent = parse_output(&lines).unwrap();
+        assert_eq!(agent.path, Path::new("/opt/bin/agent"));
+        assert_eq!(agent.env["PATH"], "/opt/bin:/usr/bin");
+        assert_eq!(agent.env["MULTI"], "a\nb");
+        assert_eq!(agent.env["TERM"], "xterm-256color");
+        assert!(!agent.env.contains_key("PWD"));
         assert!(parse_output(&[MARKER.to_string()]).is_err());
-        assert!(parse_output(&["claude: aliased".into(), MARKER.into()]).is_err());
+        assert!(parse_output(&["agent: aliased".into(), MARKER.into()]).is_err());
     }
 
     /// The real login shell (and tcsh, which can't take `-l -c`) finds a program on PATH.

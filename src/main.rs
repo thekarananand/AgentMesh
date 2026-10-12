@@ -1,4 +1,4 @@
-//! Claude Control Plane: one window per project. Sidebar lists the window's open tabs (one `claude`
+//! AgentMesh: one window per project. Sidebar lists the window's open tabs (one `agent`
 //! each) and the project's session history.
 
 mod autoname;
@@ -33,8 +33,8 @@ const UI_FONT_MEDIUM: &[u8] = include_bytes!("../assets/fonts/Inter-Medium.ttf")
 /// Weight 600: the `Current Agents` / `History` section labels.
 const UI_FONT_SEMIBOLD: &[u8] = include_bytes!("../assets/fonts/Inter-SemiBold.otf");
 
-/// Per-session state of the Claude Code that launched this app, if any. Inherited, it makes every
-/// inner `claude` think it is a child session (no transcripts), leaks the parent's control-socket
+/// Per-session state of the agent CLI that launched this app, if any. Inherited, it makes every
+/// inner `agent` think it is a child session (no transcripts), leaks the parent's control-socket
 /// token to every tab and its tools, and forces the parent's effort level. Exact names, not the
 /// `CLAUDE_CODE_` prefix: user settings like `CLAUDE_CODE_USE_BEDROCK` must pass through.
 const SCRUBBED_ENV: [&str; 10] = [
@@ -51,7 +51,7 @@ const SCRUBBED_ENV: [&str; 10] = [
 ];
 
 /// Terminal identity inherited from whatever terminal launched this app (e.g. Ghostty). Left in
-/// place, inner `claude` misdetects its host terminal (`/terminal-setup` reports Ghostty), or
+/// place, inner `agent` misdetects its host terminal (`/terminal-setup` reports Ghostty), or
 /// thinks it runs inside tmux/screen and wraps its escapes for them. Prefixes.
 const SCRUBBED_ENV_PREFIXES: [&str; 18] = [
     "TERM_PROGRAM",
@@ -124,12 +124,12 @@ fn bind_keys(cx: &mut App) {
 fn menus(cx: &mut App) -> Vec<Menu> {
     let autoname = cx.default_global::<prefs::Prefs>().autoname;
     vec![
-        Menu::new("Claude Control Plane").items([
-            MenuItem::action("Hide Claude Control Plane", Hide),
+        Menu::new("AgentMesh").items([
+            MenuItem::action("Hide AgentMesh", Hide),
             MenuItem::action("Hide Others", HideOthers),
             MenuItem::action("Show All", ShowAll),
             MenuItem::separator(),
-            MenuItem::action("Quit Claude Control Plane", Quit),
+            MenuItem::action("Quit AgentMesh", Quit),
         ]),
         Menu::new("File").items([
             MenuItem::action("New Session", NewSession),
