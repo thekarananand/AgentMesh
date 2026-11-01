@@ -178,7 +178,14 @@ impl Workspace {
             .flex()
             .items_center()
             .gap_1()
-            .pl(TRAFFIC_LIGHT_PADDING)
+            // Full screen hides the traffic lights: the switcher moves to the left edge.
+            .map(|bar| {
+                if window.is_fullscreen() {
+                    bar.pl_2()
+                } else {
+                    bar.pl(TRAFFIC_LIGHT_PADDING)
+                }
+            })
             .pr_2()
             .border_b_1()
             .border_color(rgba(HAIRLINE))

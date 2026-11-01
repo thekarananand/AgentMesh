@@ -48,11 +48,6 @@ pub const AMBER: u32 = ANSI[3];
 pub const AMBER_PILL: u32 = 0xd18f5226;
 pub const GREEN: u32 = ANSI[2];
 pub const PRESSED: u32 = 0xffffff26;
-/// Laid over the terminal while the window isn't key: 40% toward the glass base, enough to
-/// read as "not here" at a glance, still legible.
-pub const INACTIVE_SCRIM: u32 = 0x080909;
-/// Peak alpha of `INACTIVE_SCRIM`.
-pub const INACTIVE_SCRIM_ALPHA: f32 = 0.4;
 
 /// Apple's spring parameters: `response` is roughly the settle time in seconds, `damping_ratio`
 /// 1.0 means no overshoot.

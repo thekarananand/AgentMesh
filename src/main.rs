@@ -2,7 +2,9 @@
 //! each) and the project's session history.
 
 mod autoname;
+mod fullscreen;
 mod glyphs;
+mod graphics;
 mod input;
 mod launch;
 mod logger;

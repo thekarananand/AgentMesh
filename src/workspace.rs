@@ -12,14 +12,15 @@ use futures::{
     future,
 };
 use gpui::{
-    AnimationExt, App, ClipboardItem, Context, Entity, FocusHandle, Focusable, KeyDownEvent,
-    MouseButton, PathPromptOptions, Pixels, Point, PromptLevel, SharedString, SpringAnimation,
-    StyleRefinement, Subscription, Task, Window, actions, div, font, point, prelude::*, px, rgb,
-    rgba,
+    App, ClipboardItem, Context, Entity, FocusHandle, Focusable, KeyDownEvent, MouseButton,
+    PathPromptOptions, Pixels, Point, PromptLevel, SharedString, StyleRefinement, Subscription,
+    Task, Window, WindowBackgroundAppearance, actions, canvas, div, font, point, prelude::*, px,
+    rgb, rgba,
 };
 
 use crate::{
     autoname::{self, Given},
+    fullscreen,
     input::{self, Edit},
     launch::{self, AgentCli},
     prefs::{self, Prefs},
@@ -44,6 +45,8 @@ const CLOCK_REFRESH: Duration = Duration::from_secs(30);
 pub const SHORTCUT_TABS: usize = 9;
 /// An exit this soon after launch is a failed launch, whatever the exit code.
 const LAUNCH_GRACE: Duration = Duration::from_secs(3);
+/// Glass comes back after this if AppKit never reports the full-screen transition's end.
+const FULLSCREEN_FALLBACK: Duration = Duration::from_secs(2);
 
 actions!(
     control_plane,
@@ -146,6 +149,8 @@ pub struct Workspace {
     sidebar_width: Pixels,
     /// The sidebar edge is being dragged.
     resizing_sidebar: bool,
+    /// Last seen full-screen state; the title bar re-renders only when it flips.
+    fullscreen: bool,
     /// The History accordion is expanded. Starts closed in every new window (not remembered).
     pub(crate) history_open: bool,
     /// Ended sessions to list; "Show more" raises it.
@@ -174,13 +179,21 @@ pub struct Workspace {
     /// The user agreed to close a window with working agents; the next close goes through.
     close_confirmed: bool,
     last_refresh: Instant,
-    /// The window is key. Off: the chrome steps back and the terminal dims (macOS convention).
+    /// The window is key. Off: the chrome steps back and the terminal hides its cursor.
     pub(crate) window_active: bool,
     /// Wakes the poll on pid-file changes; None if FSEvents couldn't start (polling only).
     _watcher: Option<watch::Watcher>,
     _resolve: Task<()>,
     _poll: Task<()>,
     _activation: Subscription,
+    _bounds: Subscription,
+    /// Opaque for a full-screen transition; the glass is due back.
+    glass_hidden: bool,
+    /// Fallback timer that puts the glass back after a full-screen transition.
+    restore_glass: Option<Task<()>>,
+    /// AppKit's "transition finished" notifications, which put the glass back on time.
+    _fullscreen_observer: Option<fullscreen::TransitionObserver>,
+    _fullscreen_done: Option<Task<()>>,
 }
 
 impl Workspace {
@@ -245,6 +258,35 @@ impl Workspace {
             cx.notify();
         });
 
+        // Entering/leaving full screen shows/hides the traffic lights; the title bar lives in the
+        // cached sidebar, which doesn't re-render on its own.
+        let bounds = cx.observe_window_bounds(window, |this, window, cx| {
+            if std::mem::replace(&mut this.fullscreen, window.is_fullscreen()) == this.fullscreen {
+                return;
+            }
+            this.hide_fullscreen_snapshot(window, cx);
+            if let Some(sidebar) = &this.sidebar {
+                sidebar.update(cx, |_, cx| cx.notify());
+            }
+            cx.notify();
+        });
+
+        let (fullscreen_observer, fullscreen_done) = match fullscreen::observe(window) {
+            Some((observer, mut done)) => {
+                let task = cx.spawn_in(window, async move |this, cx| {
+                    while done.next().await.is_some() {
+                        this.update_in(cx, |this, window, _| this.restore_glass(window))
+                            .ok();
+                    }
+                });
+                (Some(observer), Some(task))
+            }
+            None => {
+                log::warn!("full screen: transition notifications unavailable, using a timer");
+                (None, None)
+            }
+        };
+
         // Closing the window hangs up on every tab; ask first if any agent is mid-turn.
         let this = cx.weak_entity();
         window.on_window_should_close(cx, move |window, cx| {
@@ -272,6 +314,7 @@ impl Workspace {
             sidebar_open: prefs.sidebar_open,
             sidebar_width: px(prefs.sidebar_width).clamp(MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH),
             resizing_sidebar: false,
+            fullscreen: window.is_fullscreen(),
             refresh,
             font_size,
             cell_width,
@@ -289,6 +332,11 @@ impl Workspace {
             _resolve: resolve,
             _poll: poll,
             _activation: activation,
+            _bounds: bounds,
+            glass_hidden: false,
+            restore_glass: None,
+            _fullscreen_observer: fullscreen_observer,
+            _fullscreen_done: fullscreen_done,
         }
     }
 
@@ -644,7 +692,79 @@ impl Workspace {
         prefs::update(cx, |prefs| prefs.sidebar_width = width);
     }
 
-    /// The grab strip on the sidebar's right edge. Drag to resize; double-click resets.
+    /// Window-level move/up listeners while the sidebar is being resized. Element listeners only
+    /// fire over the hovered element, and the occluding grab strip hides the root from a release
+    /// right where the press happened, which left the drag stuck on.
+    fn sidebar_drag_listeners(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let workspace = cx.entity().downgrade();
+        canvas(
+            |_, _, _| {},
+            move |_, (), window, _| {
+                let moved = workspace.clone();
+                window.on_mouse_event(move |event: &gpui::MouseMoveEvent, phase, window, cx| {
+                    if phase.bubble() {
+                        moved
+                            .update(cx, |this, cx| {
+                                // Released outside the window: no up event ever arrives.
+                                if event.pressed_button == Some(MouseButton::Left) {
+                                    this.resize_sidebar(event.position.x, window, cx);
+                                } else {
+                                    this.end_sidebar_resize(cx);
+                                }
+                            })
+                            .ok();
+                    }
+                });
+                window.on_mouse_event(move |_: &gpui::MouseUpEvent, phase, _, cx| {
+                    if phase.bubble() {
+                        workspace
+                            .update(cx, |this, cx| this.end_sidebar_resize(cx))
+                            .ok();
+                    }
+                });
+            },
+        )
+        .absolute()
+        .size_0()
+    }
+
+    /// macOS animates full screen by cross-fading a snapshot of the old window under the new
+    /// one. Through the glass the scaled snapshot shows as ghost text, so the window is opaque
+    /// until the animation is done.
+    fn hide_fullscreen_snapshot(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if reduce_transparency() {
+            return;
+        }
+        window.set_background_appearance(WindowBackgroundAppearance::Opaque);
+        self.glass_hidden = true;
+        self.restore_glass = Some(cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor().timer(FULLSCREEN_FALLBACK).await;
+            this.update_in(cx, |this, window, _| {
+                if this.glass_hidden {
+                    log::warn!(
+                        "full screen: no transition-end notification, glass restored by timer"
+                    );
+                }
+                this.restore_glass(window);
+            })
+            .ok();
+        }));
+    }
+
+    fn restore_glass(&mut self, window: &mut Window) {
+        if std::mem::take(&mut self.glass_hidden) {
+            window.set_background_appearance(WindowBackgroundAppearance::Blurred);
+        }
+    }
+
+    fn end_sidebar_resize(&mut self, cx: &mut Context<Self>) {
+        if std::mem::take(&mut self.resizing_sidebar) {
+            self.save_sidebar_width(cx);
+            cx.notify();
+        }
+    }
+
+    /// The grab strip on the sidebar's right edge. Drag to resize.
     fn render_sidebar_handle(&self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .id("sidebar-resize")
@@ -659,15 +779,9 @@ impl Workspace {
             .hover(|handle| handle.bg(rgba(HAIRLINE)))
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
+                cx.listener(|this, _, _, cx| {
                     cx.stop_propagation();
-                    if event.click_count >= 2 {
-                        this.resizing_sidebar = false;
-                        this.sidebar_width = SIDEBAR_WIDTH;
-                        this.save_sidebar_width(cx);
-                    } else {
-                        this.resizing_sidebar = true;
-                    }
+                    this.resizing_sidebar = true;
                     cx.notify();
                 }),
             )
@@ -943,7 +1057,8 @@ impl Workspace {
             return;
         };
         // Dropping the view stops the PTY; alacritty's `Pty` drop sends SIGHUP and reaps agent.
-        self.tabs.remove(index);
+        let tab = self.tabs.remove(index);
+        tab.view.read(cx).free_images(window);
         if self
             .renaming
             .as_ref()
@@ -1141,25 +1256,10 @@ impl Render for Workspace {
         };
 
         let root = div()
-            // Drag tracking on the root: it spans the window, so the drag keeps going wherever
-            // the pointer is (element listeners only fire while hovered).
-            .on_mouse_move(
-                cx.listener(|this, event: &gpui::MouseMoveEvent, window, cx| {
-                    if this.resizing_sidebar {
-                        this.resize_sidebar(event.position.x, window, cx);
-                    }
-                }),
-            )
-            .on_mouse_up(
-                MouseButton::Left,
-                cx.listener(|this, _, _, cx| {
-                    if std::mem::take(&mut this.resizing_sidebar) {
-                        this.save_sidebar_width(cx);
-                        cx.notify();
-                    }
-                }),
-            )
-            .when(self.resizing_sidebar, |root| root.cursor_col_resize())
+            .when(self.resizing_sidebar, |root| {
+                root.cursor_col_resize()
+                    .child(self.sidebar_drag_listeners(cx))
+            })
             .key_context("Workspace")
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(|this, _: &NewSession, window, cx| this.new_session(window, cx)))
@@ -1255,18 +1355,7 @@ impl Render for Workspace {
                                 .child(self.render_title_bar(window, cx)),
                         )
                     })
-                    .child(main)
-                    // Inactive scrim: the terminal recedes while another app is key. A plain
-                    // fill with no listeners, so clicks still reach the grid (and focus it).
-                    .child(div().absolute().inset_0().with_spring(
-                        "inactive-scrim",
-                        SpringAnimation::new(spring(0.3, 1.)).to(!self.window_active),
-                        |scrim, phase| {
-                            let shown = phase.clamp(0.0..=1.).0;
-                            scrim.bg(gpui::Hsla::from(rgb(INACTIVE_SCRIM))
-                                .opacity(shown * INACTIVE_SCRIM_ALPHA))
-                        },
-                    )),
+                    .child(main),
             )
             .children(menu)
     }

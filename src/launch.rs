@@ -21,8 +21,13 @@ const MARKER: &str = "__agentmesh_env__";
 /// Variables describing the asking shell, not the tab: its working directory and depth.
 const SHELL_ONLY_ENV: [&str; 4] = ["PWD", "OLDPWD", "SHLVL", "_"];
 /// What tabs advertise. The grid is alacritty's, but `alacritty` terminfo isn't installed
-/// everywhere and agent would take the tab for an Alacritty window.
-const TAB_ENV: [(&str, &str); 2] = [("TERM", "xterm-256color"), ("COLORTERM", "truecolor")];
+/// everywhere and agent would take the tab for an Alacritty window. Claude Code only draws
+/// pictures (kitty graphics, `src/graphics.rs`) in kitty and Ghostty unless forced.
+const TAB_ENV: [(&str, &str); 3] = [
+    ("TERM", "xterm-256color"),
+    ("COLORTERM", "truecolor"),
+    ("CLAUDE_CODE_FORCE_TERMINAL_IMAGES", "1"),
+];
 
 /// `agent` and the environment the user's login shell gives it.
 #[derive(Clone, Debug)]

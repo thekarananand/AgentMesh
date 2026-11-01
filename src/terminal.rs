@@ -19,14 +19,18 @@ use futures::{
     channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded},
 };
 use gpui::{
-    App, BorderStyle, Bounds, ClipboardEntry, ClipboardItem, Context, EventEmitter, ExternalPaths,
-    FocusHandle, Focusable, Font, FontStyle, FontWeight, Hsla, KeyDownEvent, Modifiers,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollWheelEvent,
-    StyledText, Task, TextRun, Window, actions, canvas, div, font, outline, point, prelude::*, px,
-    rgb, rgba, size,
+    App, BorderStyle, Bounds, ClipboardEntry, ClipboardItem, Context, Corners, EventEmitter,
+    ExternalPaths, FocusHandle, Focusable, Font, FontStyle, FontWeight, Hsla, KeyDownEvent,
+    Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point,
+    ScrollWheelEvent, StyledText, Task, TextRun, Window, actions, canvas, div, font, outline,
+    point, prelude::*, px, rgb, rgba, size,
 };
 
-use crate::{glyphs, launch::AgentCli};
+use crate::{
+    glyphs,
+    graphics::{self, GraphicsPty, Images},
+    launch::AgentCli,
+};
 
 pub const FONT_FAMILY: &str = "JetBrainsMono Nerd Font Mono";
 pub const FONT_SIZE: Pixels = px(14.);
@@ -140,6 +144,8 @@ pub struct Terminal {
     cells: Vec<CellSnapshot>,
     /// Regular, bold, italic, bold italic; built once, not per cell.
     fonts: [Font; 4],
+    /// Pictures the program sent (kitty graphics), drawn where its placeholder cells are.
+    images: Images,
     _events: Task<()>,
 }
 
@@ -149,6 +155,7 @@ pub struct Spawned {
     term: Arc<FairMutex<Term<Listener>>>,
     pty: Notifier,
     pid: u32,
+    images: Images,
     events: UnboundedReceiver<Event>,
 }
 
@@ -168,6 +175,13 @@ impl Drop for Terminal {
 }
 
 impl Terminal {
+    /// Frees the GPU textures of this tab's pictures (the tab is closing).
+    pub fn free_images(&self, window: &mut Window) {
+        for texture in self.images.take_retired(true) {
+            window.drop_image(texture).ok();
+        }
+    }
+
     /// Starts `agent` in a PTY: the login shell loads the user's PATH and toolchain, then `exec`
     /// replaces it with agent, so there is no bare shell prompt to fall back to.
     pub fn spawn(launch: &Launch, layout: Layout) -> Result<Spawned, String> {
@@ -196,6 +210,9 @@ impl Terminal {
             &TermSize::new(layout.columns, layout.rows),
             listener.clone(),
         )));
+        let images = Images::default();
+        let pty = GraphicsPty::new(pty, images.clone(), listener.clone())
+            .map_err(|error| format!("Can't open a terminal: {error}"))?;
         let event_loop = EventLoop::new(term.clone(), listener, pty, true, false)
             .map_err(|error| format!("Can't start the terminal: {error}"))?;
         let pty = Notifier(event_loop.channel());
@@ -204,6 +221,7 @@ impl Terminal {
             term,
             pty,
             pid,
+            images,
             events,
         })
     }
@@ -213,6 +231,7 @@ impl Terminal {
             term,
             pty,
             pid,
+            images,
             events: events_rx,
         } = spawned;
         let events = cx.spawn(async move |this, cx| {
@@ -255,6 +274,7 @@ impl Terminal {
             focus_handle: cx.focus_handle(),
             cells: Vec::new(),
             fonts: [regular, bold, italic, bold_italic],
+            images,
             _events: events,
         }
     }
@@ -573,6 +593,68 @@ impl GlyphRun {
     }
 }
 
+/// Neighbouring placeholder cells showing consecutive columns of one picture row: one clip.
+struct ImageRun {
+    column: usize,
+    row: usize,
+    width: usize,
+    id: u32,
+    image_row: u32,
+    image_column: u32,
+}
+
+impl ImageRun {
+    fn push(runs: &mut Vec<ImageRun>, column: usize, row: usize, slice: (u32, u32, u32)) {
+        let (id, image_row, image_column) = slice;
+        if let Some(last) = runs.last_mut()
+            && (last.row, last.id, last.image_row) == (row, id, image_row)
+            && last.column + last.width == column
+            && last.image_column + last.width as u32 == image_column
+        {
+            last.width += 1;
+            return;
+        }
+        runs.push(ImageRun {
+            column,
+            row,
+            width: 1,
+            id,
+            image_row,
+            image_column,
+        });
+    }
+}
+
+/// Where a picture goes, given the origin of its cell box: scaled to fit the box (kitty's
+/// `c`/`r`; its own size when unset), aspect kept, centered.
+fn picture_bounds(
+    picture: &graphics::Picture,
+    origin: Point<Pixels>,
+    cell_width: Pixels,
+    line_height: Pixels,
+) -> Bounds<Pixels> {
+    let pixels = picture.image.size(0);
+    let natural = size(px(pixels.width.0 as f32), px(pixels.height.0 as f32));
+    let boxed = size(
+        match picture.columns {
+            0 => natural.width,
+            columns => cell_width * columns as f32,
+        },
+        match picture.rows {
+            0 => natural.height,
+            rows => line_height * rows as f32,
+        },
+    );
+    let scale = (boxed.width / natural.width).min(boxed.height / natural.height);
+    let fitted = size(natural.width * scale, natural.height * scale);
+    let centered = origin
+        + point(
+            (boxed.width - fitted.width) / 2.,
+            (boxed.height - fitted.height) / 2.,
+        );
+    Bounds::new(centered, fitted)
+}
+
 /// A piece of one grid row drawn as one `StyledText`, placed at its column. ASCII cells batch
 /// into one segment; any other char gets its own, because a fallback font's advance isn't the
 /// grid's cell width and would shift every cell after it.
@@ -607,14 +689,16 @@ impl Segment {
 
 impl Terminal {
     /// Paints `(column, row, char, color)` glyph cells over the text, one cell each, plus the
-    /// hollow cursor (column, row) when the window isn't focused.
+    /// hollow cursor (column, row) when the window is key but the terminal isn't focused.
     fn glyph_canvas(
         &self,
         cells: Vec<GlyphRun>,
+        pictures: Vec<ImageRun>,
         hollow_cursor: Option<(usize, usize)>,
     ) -> impl IntoElement {
         let cell_width = self.layout.cell_width;
         let line_height = self.layout.line_height;
+        let images = self.images.clone();
         canvas(
             |_, _, _| {},
             move |bounds, (), window, _| {
@@ -631,7 +715,32 @@ impl Terminal {
                         glyphs::paint(shape, run.color, window);
                     }
                 }
-                // macOS convention (Terminal, Zed): an inactive window's cursor is an outline.
+                for texture in images.take_retired(false) {
+                    window.drop_image(texture).ok();
+                }
+                for run in pictures {
+                    let Some(picture) = images.get(run.id) else {
+                        continue;
+                    };
+                    let clip = cell_bounds(run.column, run.row, run.width);
+                    let origin = clip.origin
+                        - point(
+                            cell_width * run.image_column as f32,
+                            line_height * run.image_row as f32,
+                        );
+                    let placed = picture_bounds(&picture, origin, cell_width, line_height);
+                    window
+                        .paint_image(
+                            clip,
+                            placed,
+                            Corners::default(),
+                            picture.image.clone(),
+                            0,
+                            false,
+                        )
+                        .ok();
+                }
+                // Key window, focus elsewhere (sidebar, rename field): the cursor is an outline.
                 if let Some((column, row)) = hollow_cursor {
                     window.paint_quad(outline(
                         cell_bounds(column, row, 1),
@@ -735,13 +844,15 @@ impl Terminal {
 
 impl Render for Terminal {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // Solid block only while keys would land here; the workspace re-renders tabs on window
-        // (de)activation, since this view is cached.
-        let focused = window.is_window_active() && self.focus_handle.is_focused(window);
+        // No cursor while another app is key; solid block only while keys would land here. The
+        // workspace re-renders tabs on window (de)activation, since this view is cached.
+        let window_active = window.is_window_active();
+        let focused = window_active && self.focus_handle.is_focused(window);
         // Copy under the lock; the PTY reader thread waits on it.
         let term = self.term.lock();
         let content = term.renderable_content();
-        let cursor = (content.cursor.shape != CursorShape::Hidden).then_some(content.cursor.point);
+        let cursor = (window_active && content.cursor.shape != CursorShape::Hidden)
+            .then_some(content.cursor.point);
         let selection = content.selection;
         let colors = *content.colors;
         let display_offset = content.display_offset as i32;
@@ -767,6 +878,7 @@ impl Render for Terminal {
         let mut rows: Vec<Vec<Segment>> = (0..self.layout.rows).map(|_| Vec::new()).collect();
         // Drawn as shapes, not font glyphs: glyphs at fractional x leave seams.
         let mut glyphs = Vec::new();
+        let mut pictures = Vec::new();
         let mut hollow_cursor = None;
         let mut last_colors = None;
         for cell in &cells {
@@ -795,6 +907,15 @@ impl Render for Terminal {
             };
             let font_index = cell_font(cell.flags);
             let mut ch = if cell.c == '\0' { ' ' } else { cell.c };
+            let mut zerowidth = cell.zerowidth.as_deref();
+            if ch == graphics::PLACEHOLDER {
+                // A slice of a picture, painted over the blank cell; its marks are row and column.
+                if let Some(slice) = graphics::placeholder(cell.fg, zerowidth.unwrap_or_default()) {
+                    ImageRun::push(&mut pictures, cell.point.column.0, cell.row, slice);
+                }
+                ch = ' ';
+                zerowidth = None;
+            }
             if glyphs::covers(ch) {
                 GlyphRun::push(&mut glyphs, cell.point.column.0, cell.row, ch, fg);
                 ch = ' ';
@@ -805,14 +926,14 @@ impl Render for Terminal {
             } else {
                 1
             };
-            let solo = !ch.is_ascii() || width == 2 || cell.zerowidth.is_some();
+            let solo = !ch.is_ascii() || width == 2 || zerowidth.is_some();
             Segment::place(segments, cell.point.column.0, width, solo);
             let Some(segment) = segments.last_mut() else {
                 continue;
             };
             let start = segment.text.len();
             segment.text.push(ch);
-            segment.text.extend(cell.zerowidth.iter().flatten());
+            segment.text.extend(zerowidth.into_iter().flatten());
             let len = segment.text.len() - start;
             match segment.runs.last_mut() {
                 Some(run)
@@ -877,7 +998,7 @@ impl Render for Terminal {
                             }),
                         )
                     }))
-                    .child(self.glyph_canvas(glyphs, hollow_cursor))
+                    .child(self.glyph_canvas(glyphs, pictures, hollow_cursor))
                     .child(self.drag_listeners(cx)),
             )
     }

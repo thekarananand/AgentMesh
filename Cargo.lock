@@ -79,14 +79,19 @@ dependencies = [
 
 [[package]]
 name = "agentmesh"
-version = "0.1.0"
+version = "1.0.1"
 dependencies = [
  "alacritty_terminal",
+ "base64",
  "futures",
  "gpui",
  "gpui_platform",
+ "image",
  "libc",
  "log",
+ "objc",
+ "polling",
+ "raw-window-handle",
  "serde_json",
  "shlex",
 ]
