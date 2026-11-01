@@ -17,7 +17,7 @@ mod workspace;
 
 use std::{borrow::Cow, env};
 
-use gpui::{App, KeyBinding, Menu, MenuItem, WindowHandle, actions};
+use gpui::{App, KeyBinding, Menu, MenuItem, PathPromptOptions, WindowHandle, actions};
 use logger::LogErr;
 use workspace::{
     ActivateTab, CloseTab, DecreaseFontSize, IncreaseFontSize, Minimize, NewSession, NextTab,
@@ -76,7 +76,7 @@ const SCRUBBED_ENV_PREFIXES: [&str; 18] = [
 
 actions!(
     control_plane,
-    [Quit, Hide, HideOthers, ShowAll, ToggleAutoname]
+    [Quit, Hide, HideOthers, ShowAll, ToggleAutoname, NewWindow]
 );
 
 fn bind_keys(cx: &mut App) {
@@ -117,8 +117,30 @@ fn bind_keys(cx: &mut App) {
         let menus = menus(cx);
         cx.set_menus(menus);
     });
+    cx.on_action(|_: &NewWindow, cx| new_window(cx));
     let menus = menus(cx);
     cx.set_menus(menus);
+    // Right-click on the Dock icon. App-level action: works without a focused window.
+    cx.set_dock_menu(vec![MenuItem::action("New Window", NewWindow)]);
+}
+
+/// Each window is a project: asks for the folder, then opens (or brings forward) its window.
+fn new_window(cx: &mut App) {
+    let paths = cx.prompt_for_paths(PathPromptOptions {
+        files: false,
+        directories: true,
+        multiple: false,
+        prompt: Some("Open Project".into()),
+    });
+    cx.spawn(async move |cx| {
+        let Ok(Ok(Some(mut paths))) = paths.await else {
+            return;
+        };
+        if let Some(folder) = paths.pop().map(window::canonical) {
+            cx.update(|cx| window::open_window(folder, cx));
+        }
+    })
+    .detach();
 }
 
 fn menus(cx: &mut App) -> Vec<Menu> {
